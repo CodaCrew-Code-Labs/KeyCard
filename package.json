@@ -1,6 +1,6 @@
 {
   "name": "@keycard/subscription-backend",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A plug-and-play subscription management backend for SaaS applications",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
