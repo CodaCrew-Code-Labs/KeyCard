@@ -1,4 +1,9 @@
-import { calculateProration, generateProrationLineItems, calculateNextBillingDate, generateInvoiceNumber } from '../proration';
+import {
+  calculateProration,
+  generateProrationLineItems,
+  calculateNextBillingDate,
+  generateInvoiceNumber,
+} from '../proration';
 
 describe('Proration Utilities', () => {
   describe('calculateProration', () => {
@@ -84,14 +89,14 @@ describe('Proration Utilities', () => {
       const inv1 = generateInvoiceNumber();
       const inv2 = generateInvoiceNumber();
 
-      expect(inv1).toMatch(/^INV-\d{6}-\d{6}$/);
+      expect(inv1).toMatch(/^INV-\d{6}-\d{6}[A-Z0-9]{4}$/);
       expect(inv1).not.toBe(inv2);
     });
 
     it('should use custom prefix', () => {
       const inv = generateInvoiceNumber('CUSTOM');
 
-      expect(inv).toMatch(/^CUSTOM-\d{6}-\d{6}$/);
+      expect(inv).toMatch(/^CUSTOM-\d{6}-\d{6}[A-Z0-9]{4}$/);
     });
   });
 });

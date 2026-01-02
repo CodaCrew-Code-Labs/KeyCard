@@ -1,16 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { ZodError } from 'zod';
 import { SubscriptionError } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
  * Global error handler middleware
  */
-export function errorHandler(
-  error: Error,
-  req: Request,
-  res: Response,
-  next: NextFunction
-) {
+export function errorHandler(error: Error, req: Request, res: Response, _next: NextFunction) {
   const requestId = uuidv4();
 
   if (error instanceof SubscriptionError) {
@@ -25,21 +22,19 @@ export function errorHandler(
   }
 
   // Handle Prisma errors
-  if (error.name === 'PrismaClientKnownRequestError') {
-    const prismaError = error as any;
-
-    if (prismaError.code === 'P2002') {
+  if (error instanceof PrismaClientKnownRequestError) {
+    if (error.code === 'P2002') {
       return res.status(409).json({
         error: {
           code: 'resource_conflict',
           message: 'A resource with these values already exists',
-          details: prismaError.meta,
+          details: error.meta,
           requestId,
         },
       });
     }
 
-    if (prismaError.code === 'P2025') {
+    if (error.code === 'P2025') {
       return res.status(404).json({
         error: {
           code: 'resource_not_found',
@@ -51,12 +46,12 @@ export function errorHandler(
   }
 
   // Handle validation errors (Zod)
-  if (error.name === 'ZodError') {
+  if (error instanceof ZodError) {
     return res.status(400).json({
       error: {
         code: 'validation_error',
         message: 'Invalid request data',
-        details: (error as any).errors,
+        details: error.errors,
         requestId,
       },
     });

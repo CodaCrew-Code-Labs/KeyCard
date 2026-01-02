@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import { Response, NextFunction } from 'express';
 import { AuthConfig, AuthenticatedRequest, SubscriptionError } from '../types';
 
 /**

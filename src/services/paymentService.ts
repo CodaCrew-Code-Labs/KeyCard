@@ -1,5 +1,12 @@
-import { PrismaClient, Payment, PaymentStatus } from '@prisma/client';
-import { Logger, PaymentAdapter, PaginationParams, PaginationResult, SubscriptionError, LifecycleHooks } from '../types';
+import { PrismaClient, Prisma, Payment, PaymentStatus } from '@prisma/client';
+import {
+  Logger,
+  PaymentAdapter,
+  PaginationParams,
+  PaginationResult,
+  SubscriptionError,
+  LifecycleHooks,
+} from '../types';
 
 export interface CreatePaymentInput {
   tenantId: string;
@@ -8,7 +15,7 @@ export interface CreatePaymentInput {
   amount: number;
   currency: string;
   paymentMethod?: string;
-  metadata?: Record<string, any>;
+  metadata?: Prisma.InputJsonValue;
 }
 
 export interface RefundPaymentInput {
@@ -52,8 +59,8 @@ export class PaymentService {
           status: paymentResult.status,
           paymentProvider: this.paymentAdapter.name,
           providerPaymentId: paymentResult.paymentId,
-          paymentMethodDetails: {},
-          metadata: input.metadata || {},
+          paymentMethodDetails: Prisma.JsonNull,
+          metadata: input.metadata ?? Prisma.JsonNull,
         },
       });
 
@@ -105,16 +112,13 @@ export class PaymentService {
           status: 'failed',
           paymentProvider: this.paymentAdapter.name,
           failureReason: error instanceof Error ? error.message : 'Unknown error',
-          metadata: input.metadata || {},
+          metadata: input.metadata ?? Prisma.JsonNull,
         },
       });
 
-      throw new SubscriptionError(
-        'payment_failed',
-        'Payment processing failed',
-        402,
-        { paymentId: payment.id }
-      );
+      throw new SubscriptionError('payment_failed', 'Payment processing failed', 402, {
+        paymentId: payment.id,
+      });
     }
   }
 
@@ -138,7 +142,8 @@ export class PaymentService {
     const { page = 1, limit = 20, userId, invoiceId, status } = filters;
     const skip = (page - 1) * limit;
 
-    const where: any = { tenantId };
+    const where: { tenantId: string; userId?: string; invoiceId?: string; status?: PaymentStatus } =
+      { tenantId };
     if (userId) where.userId = userId;
     if (invoiceId) where.invoiceId = invoiceId;
     if (status) where.status = status;

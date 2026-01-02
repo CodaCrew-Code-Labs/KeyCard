@@ -1,5 +1,3 @@
-import { Decimal } from '@prisma/client/runtime/library';
-
 export interface ProrationParams {
   currentPlanAmount: number;
   newPlanAmount: number;
@@ -20,13 +18,8 @@ export interface ProrationResult {
  * Calculate proration when changing subscription plans
  */
 export function calculateProration(params: ProrationParams): ProrationResult {
-  const {
-    currentPlanAmount,
-    newPlanAmount,
-    currentPeriodStart,
-    currentPeriodEnd,
-    changeDate,
-  } = params;
+  const { currentPlanAmount, newPlanAmount, currentPeriodStart, currentPeriodEnd, changeDate } =
+    params;
 
   // Calculate total days in billing period
   const totalDays = Math.ceil(
@@ -133,5 +126,6 @@ export function generateInvoiceNumber(prefix: string = 'INV'): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const timestamp = Date.now().toString().slice(-6);
-  return `${prefix}-${year}${month}-${timestamp}`;
+  const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `${prefix}-${year}${month}-${timestamp}${random}`;
 }

@@ -1,7 +1,13 @@
 import { Router } from 'express';
+import { PricingModel } from '@prisma/client';
 import { PlanService } from '../services/planService';
 import { AuthenticatedRequest } from '../types';
-import { validate, createPlanSchema, updatePlanSchema, paginationSchema } from '../utils/validators';
+import {
+  validate,
+  createPlanSchema,
+  updatePlanSchema,
+  paginationSchema,
+} from '../utils/validators';
 
 export function createPlanRoutes(planService: PlanService): Router {
   const router = Router();
@@ -40,8 +46,13 @@ export function createPlanRoutes(planService: PlanService): Router {
       const result = await planService.list(req.auth!.tenantId, {
         page,
         limit,
-        isActive: req.query.is_active === 'true' ? true : req.query.is_active === 'false' ? false : undefined,
-        pricingModel: req.query.pricing_model as any,
+        isActive:
+          req.query.is_active === 'true'
+            ? true
+            : req.query.is_active === 'false'
+              ? false
+              : undefined,
+        pricingModel: req.query.pricing_model as PricingModel | undefined,
       });
 
       res.json(result);

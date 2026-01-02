@@ -6,10 +6,7 @@ let prismaClient: PrismaClient | null = null;
 /**
  * Initialize Prisma client with configuration
  */
-export function initializePrismaClient(
-  config: DatabaseConfig,
-  logger: Logger
-): PrismaClient {
+export function initializePrismaClient(config: DatabaseConfig, logger: Logger): PrismaClient {
   if (config.prismaClient) {
     prismaClient = config.prismaClient;
     return prismaClient;
@@ -47,15 +44,15 @@ export function initializePrismaClient(
   });
 
   // Log queries in debug mode
-  prismaClient.$on('query' as never, (e: any) => {
+  prismaClient.$on('query' as never, (e: { query: string; params: string }) => {
     logger.debug('Prisma Query', { query: e.query, params: e.params });
   });
 
-  prismaClient.$on('error' as never, (e: any) => {
+  prismaClient.$on('error' as never, (e: { message: string }) => {
     logger.error('Prisma Error', e);
   });
 
-  prismaClient.$on('warn' as never, (e: any) => {
+  prismaClient.$on('warn' as never, (e: { message: string }) => {
     logger.warn('Prisma Warning', e);
   });
 

@@ -1,4 +1,4 @@
-import { PrismaClient, UsageRecord } from '@prisma/client';
+import { PrismaClient, Prisma, UsageRecord } from '@prisma/client';
 import { Logger, PaginationParams, PaginationResult } from '../types';
 
 export interface CreateUsageInput {
@@ -8,7 +8,7 @@ export interface CreateUsageInput {
   metricName: string;
   quantity: number;
   timestamp?: Date;
-  metadata?: Record<string, any>;
+  metadata?: Prisma.InputJsonValue;
 }
 
 export interface ListUsageFilters extends PaginationParams {
@@ -46,7 +46,7 @@ export class UsageService {
         metricName: input.metricName,
         quantity: input.quantity,
         timestamp: input.timestamp || new Date(),
-        metadata: input.metadata || {},
+        metadata: input.metadata ?? Prisma.JsonNull,
       },
     });
 
@@ -62,7 +62,12 @@ export class UsageService {
     const { page = 1, limit = 20, subscriptionId, metricName, startDate, endDate } = filters;
     const skip = (page - 1) * limit;
 
-    const where: any = {
+    const where: {
+      tenantId: string;
+      subscriptionId: string;
+      metricName?: string;
+      timestamp?: { gte?: Date; lte?: Date };
+    } = {
       tenantId,
       subscriptionId,
     };
@@ -116,7 +121,11 @@ export class UsageService {
     startDate?: Date,
     endDate?: Date
   ): Promise<number> {
-    const where: any = {
+    const where: {
+      subscriptionId: string;
+      metricName: string;
+      timestamp?: { gte?: Date; lte?: Date };
+    } = {
       subscriptionId,
       metricName,
     };

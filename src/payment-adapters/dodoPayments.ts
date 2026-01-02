@@ -85,22 +85,20 @@ export class DodoPaymentsAdapter implements PaymentAdapter {
         .update(params.payload)
         .digest('hex');
 
-      return crypto.timingSafeEqual(
-        Buffer.from(params.signature),
-        Buffer.from(expectedSignature)
-      );
+      return crypto.timingSafeEqual(Buffer.from(params.signature), Buffer.from(expectedSignature));
     } catch {
       return false;
     }
   }
 
-  async processWebhook(payload: any): Promise<ProcessWebhookResult> {
+  async processWebhook(payload: Record<string, unknown>): Promise<ProcessWebhookResult> {
     // Parse DoDo Payments webhook format
+    const data = payload.data as Record<string, unknown> | undefined;
     return {
-      eventType: payload.event_type || 'payment.unknown',
-      paymentId: payload.data?.charge_id || payload.data?.id,
-      status: this.mapStatus(payload.data?.status),
-      metadata: payload.data,
+      eventType: (payload.event_type as string) || 'payment.unknown',
+      paymentId: (data?.charge_id as string) || (data?.id as string),
+      status: this.mapStatus(data?.status as string),
+      metadata: data,
     };
   }
 
@@ -119,8 +117,8 @@ export class DodoPaymentsAdapter implements PaymentAdapter {
 
   private async makeRequest(
     endpoint: string,
-    options: { method: string; body?: any }
-  ): Promise<any> {
+    options: { method: string; body?: Record<string, unknown> }
+  ): Promise<Record<string, unknown>> {
     // This is a mock implementation
     // In production, this would make actual HTTP requests to DoDo Payments API
 
@@ -140,7 +138,7 @@ export class DodoPaymentsAdapter implements PaymentAdapter {
       method: options.method,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.apiKey}`,
+        Authorization: `Bearer ${this.config.apiKey}`,
         'X-Merchant-ID': this.config.merchantId,
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
@@ -150,6 +148,6 @@ export class DodoPaymentsAdapter implements PaymentAdapter {
       throw new Error(`DoDo Payments API error: ${response.statusText}`);
     }
 
-    return response.json();
+    return response.json() as Promise<Record<string, unknown>>;
   }
 }

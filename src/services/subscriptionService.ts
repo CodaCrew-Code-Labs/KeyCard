@@ -1,5 +1,11 @@
-import { PrismaClient, Subscription, SubscriptionStatus } from '@prisma/client';
-import { Logger, PaginationParams, PaginationResult, SubscriptionError, LifecycleHooks } from '../types';
+import { PrismaClient, Prisma, Subscription, SubscriptionStatus } from '@prisma/client';
+import {
+  Logger,
+  PaginationParams,
+  PaginationResult,
+  SubscriptionError,
+  LifecycleHooks,
+} from '../types';
 import { calculateNextBillingDate } from '../utils/proration';
 
 export interface CreateSubscriptionInput {
@@ -8,7 +14,7 @@ export interface CreateSubscriptionInput {
   planId: string;
   quantity?: number;
   trialPeriodDays?: number;
-  metadata?: Record<string, any>;
+  metadata?: Prisma.InputJsonValue;
 }
 
 export interface UpdateSubscriptionInput {
@@ -52,11 +58,7 @@ export class SubscriptionService {
     }
 
     if (!plan.isActive) {
-      throw new SubscriptionError(
-        'validation_error',
-        'Cannot subscribe to an inactive plan',
-        400
-      );
+      throw new SubscriptionError('validation_error', 'Cannot subscribe to an inactive plan', 400);
     }
 
     // Check if user already has active subscription
@@ -112,7 +114,7 @@ export class SubscriptionService {
         trialStart,
         trialEnd,
         quantity: input.quantity || 1,
-        metadata: input.metadata || {},
+        metadata: input.metadata ?? Prisma.JsonNull,
       },
       include: {
         plan: true,
@@ -136,12 +138,9 @@ export class SubscriptionService {
     });
 
     if (!subscription) {
-      throw new SubscriptionError(
-        'resource_not_found',
-        'Subscription not found',
-        404,
-        { subscriptionId: id }
-      );
+      throw new SubscriptionError('resource_not_found', 'Subscription not found', 404, {
+        subscriptionId: id,
+      });
     }
 
     return subscription;
@@ -154,7 +153,12 @@ export class SubscriptionService {
     const { page = 1, limit = 20, userId, status, planId } = filters;
     const skip = (page - 1) * limit;
 
-    const where: any = { tenantId };
+    const where: {
+      tenantId: string;
+      userId?: string;
+      status?: SubscriptionStatus;
+      planId?: string;
+    } = { tenantId };
 
     if (userId) where.userId = userId;
     if (status) where.status = status;
@@ -191,7 +195,7 @@ export class SubscriptionService {
 
     this.logger.info('Updating subscription', { subscriptionId: id });
 
-    const updateData: any = {};
+    const updateData: { quantity?: number; planId?: string } = {};
 
     if (input.quantity !== undefined) {
       updateData.quantity = input.quantity;
@@ -236,16 +240,12 @@ export class SubscriptionService {
     const subscription = await this.findById(id, tenantId);
 
     if (subscription.status === 'canceled') {
-      throw new SubscriptionError(
-        'validation_error',
-        'Subscription is already canceled',
-        400
-      );
+      throw new SubscriptionError('validation_error', 'Subscription is already canceled', 400);
     }
 
     this.logger.info('Canceling subscription', { subscriptionId: id });
 
-    const updateData: any = {
+    const updateData: { canceledAt: Date; status?: SubscriptionStatus; endedAt?: Date } = {
       canceledAt: new Date(),
     };
 
@@ -270,11 +270,7 @@ export class SubscriptionService {
     return updatedSubscription;
   }
 
-  async pause(
-    id: string,
-    tenantId: string,
-    input: PauseSubscriptionInput
-  ): Promise<Subscription> {
+  async pause(id: string, tenantId: string, input: PauseSubscriptionInput): Promise<Subscription> {
     const subscription = await this.findById(id, tenantId);
 
     if (subscription.status !== 'active') {

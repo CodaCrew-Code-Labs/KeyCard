@@ -1,6 +1,13 @@
-import { Request } from 'express';
+import { Request, Application } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { Server } from 'http';
+import type { PlanService } from '../services/planService';
+import type { SubscriptionService } from '../services/subscriptionService';
+import type { InvoiceService } from '../services/invoiceService';
+import type { PaymentService } from '../services/paymentService';
+import type { UsageService } from '../services/usageService';
+import type { AnalyticsService } from '../services/analyticsService';
+import type { WebhookService } from '../services/webhookService';
 
 // Configuration types
 export interface DatabaseConfig {
@@ -18,7 +25,7 @@ export interface DatabaseConfig {
 
 export interface PaymentConfig {
   provider: string;
-  config: Record<string, any>;
+  config: Record<string, unknown>;
   customProcessor?: PaymentAdapter;
 }
 
@@ -30,7 +37,7 @@ export interface DunningConfig {
   enabled: boolean;
   retrySchedule: number[];
   emailProvider?: string;
-  emailConfig?: Record<string, any>;
+  emailConfig?: Record<string, unknown>;
 }
 
 export interface FeaturesConfig {
@@ -51,12 +58,12 @@ export interface RateLimitConfig {
 }
 
 export interface LifecycleHooks {
-  onSubscriptionCreated?: (subscription: any) => Promise<void>;
-  onSubscriptionUpdated?: (subscription: any) => Promise<void>;
-  onSubscriptionCanceled?: (subscription: any) => Promise<void>;
-  onPaymentFailed?: (payment: any, subscription: any) => Promise<void>;
-  onPaymentSucceeded?: (payment: any, subscription: any) => Promise<void>;
-  onInvoiceGenerated?: (invoice: any) => Promise<void>;
+  onSubscriptionCreated?: (subscription: unknown) => Promise<void>;
+  onSubscriptionUpdated?: (subscription: unknown) => Promise<void>;
+  onSubscriptionCanceled?: (subscription: unknown) => Promise<void>;
+  onPaymentFailed?: (payment: unknown, subscription: unknown) => Promise<void>;
+  onPaymentSucceeded?: (payment: unknown, subscription: unknown) => Promise<void>;
+  onInvoiceGenerated?: (invoice: unknown) => Promise<void>;
 }
 
 export interface SubscriptionBackendConfig {
@@ -87,13 +94,13 @@ export interface CreatePaymentParams {
   amount: number;
   currency: string;
   customerId: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CreatePaymentResult {
   paymentId: string;
   status: 'pending' | 'succeeded' | 'failed';
-  providerResponse: any;
+  providerResponse: Record<string, unknown>;
 }
 
 export interface RefundPaymentParams {
@@ -117,7 +124,7 @@ export interface ProcessWebhookResult {
   eventType: string;
   paymentId: string;
   status: string;
-  metadata: any;
+  metadata: Record<string, unknown> | undefined;
 }
 
 export interface PaymentAdapter {
@@ -125,7 +132,7 @@ export interface PaymentAdapter {
   createPayment(params: CreatePaymentParams): Promise<CreatePaymentResult>;
   refundPayment(params: RefundPaymentParams): Promise<RefundPaymentResult>;
   verifyWebhook(params: VerifyWebhookParams): boolean;
-  processWebhook(payload: any): Promise<ProcessWebhookResult>;
+  processWebhook(payload: Record<string, unknown>): Promise<ProcessWebhookResult>;
 }
 
 // Service types
@@ -146,24 +153,24 @@ export interface PaginationResult<T> {
 
 // Logger interface
 export interface Logger {
-  info(message: string, meta?: any): void;
-  error(message: string, meta?: any): void;
-  warn(message: string, meta?: any): void;
-  debug(message: string, meta?: any): void;
+  info(message: string, meta?: unknown): void;
+  error(message: string, meta?: unknown): void;
+  warn(message: string, meta?: unknown): void;
+  debug(message: string, meta?: unknown): void;
 }
 
 // Subscription Backend Instance
 export interface SubscriptionBackend {
-  app: any; // Express app
+  app: Application;
   server: Server | null;
   services: {
-    plans: any;
-    subscriptions: any;
-    invoices: any;
-    payments: any;
-    usage: any;
-    analytics: any;
-    webhooks: any;
+    plans: PlanService;
+    subscriptions: SubscriptionService;
+    invoices: InvoiceService;
+    payments: PaymentService;
+    usage: UsageService;
+    analytics: AnalyticsService;
+    webhooks: WebhookService;
   };
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -174,7 +181,7 @@ export interface SubscriptionBackend {
 export interface ApiError {
   code: string;
   message: string;
-  details?: any;
+  details?: Record<string, unknown>;
   requestId?: string;
 }
 
@@ -183,7 +190,7 @@ export class SubscriptionError extends Error {
     public code: string,
     message: string,
     public statusCode: number = 500,
-    public details?: any
+    public details?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'SubscriptionError';

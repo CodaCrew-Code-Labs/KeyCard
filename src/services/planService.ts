@@ -1,4 +1,10 @@
-import { PrismaClient, SubscriptionPlan, PricingModel, BillingInterval } from '@prisma/client';
+import {
+  PrismaClient,
+  Prisma,
+  SubscriptionPlan,
+  PricingModel,
+  BillingInterval,
+} from '@prisma/client';
 import { Logger, PaginationParams, PaginationResult, SubscriptionError } from '../types';
 
 export interface CreatePlanInput {
@@ -12,7 +18,7 @@ export interface CreatePlanInput {
   billingIntervalCount?: number;
   trialPeriodDays?: number;
   setupFee?: number;
-  features?: Record<string, any>;
+  features?: Prisma.InputJsonValue;
 }
 
 export interface UpdatePlanInput {
@@ -21,7 +27,7 @@ export interface UpdatePlanInput {
   amount?: number;
   trialPeriodDays?: number;
   setupFee?: number;
-  features?: Record<string, any>;
+  features?: Prisma.InputJsonValue;
   isActive?: boolean;
 }
 
@@ -68,12 +74,9 @@ export class PlanService {
     });
 
     if (!plan) {
-      throw new SubscriptionError(
-        'resource_not_found',
-        'Subscription plan not found',
-        404,
-        { planId: id }
-      );
+      throw new SubscriptionError('resource_not_found', 'Subscription plan not found', 404, {
+        planId: id,
+      });
     }
 
     return plan;
@@ -86,7 +89,9 @@ export class PlanService {
     const { page = 1, limit = 20, isActive, pricingModel } = filters;
     const skip = (page - 1) * limit;
 
-    const where: any = { tenantId };
+    const where: { tenantId: string; isActive?: boolean; pricingModel?: PricingModel } = {
+      tenantId,
+    };
 
     if (isActive !== undefined) {
       where.isActive = isActive;
@@ -117,11 +122,7 @@ export class PlanService {
     };
   }
 
-  async update(
-    id: string,
-    tenantId: string,
-    input: UpdatePlanInput
-  ): Promise<SubscriptionPlan> {
+  async update(id: string, tenantId: string, input: UpdatePlanInput): Promise<SubscriptionPlan> {
     // Verify plan exists and belongs to tenant
     await this.findById(id, tenantId);
 

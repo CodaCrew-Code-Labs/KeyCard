@@ -1,9 +1,10 @@
 import 'dotenv/config';
 import { createSubscriptionBackend } from './server';
+import { Request } from 'express';
 
-async function startDev() {
+async function startDev(): Promise<void> {
   try {
-    const backend = await createSubscriptionBackend({
+    await createSubscriptionBackend({
       port: 4000,
       database: {
         url: process.env.DATABASE_URL || 'postgresql://devuser:devpass@localhost:5432/devdb',
@@ -17,7 +18,7 @@ async function startDev() {
         },
       },
       auth: {
-        validateRequest: async (req) => {
+        validateRequest: async (_req: Request) => {
           return {
             userId: 'dev_user_123',
             tenantId: 'dev_tenant_123',
@@ -34,4 +35,4 @@ async function startDev() {
   }
 }
 
-startDev();
+void startDev();

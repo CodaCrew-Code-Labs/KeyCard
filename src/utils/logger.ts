@@ -15,18 +15,15 @@ export const createLogger = (customLogger?: Logger): Logger => {
     ),
     transports: [
       new winston.transports.Console({
-        format: winston.format.combine(
-          winston.format.colorize(),
-          winston.format.simple()
-        ),
+        format: winston.format.combine(winston.format.colorize(), winston.format.simple()),
       }),
     ],
   });
 
   return {
-    info: (message: string, meta?: any) => winstonLogger.info(message, meta),
-    error: (message: string, meta?: any) => winstonLogger.error(message, meta),
-    warn: (message: string, meta?: any) => winstonLogger.warn(message, meta),
-    debug: (message: string, meta?: any) => winstonLogger.debug(message, meta),
+    info: (message: string, meta?: unknown) => winstonLogger.info(message, meta as object),
+    error: (message: string, meta?: unknown) => winstonLogger.error(message, meta as object),
+    warn: (message: string, meta?: unknown) => winstonLogger.warn(message, meta as object),
+    debug: (message: string, meta?: unknown) => winstonLogger.debug(message, meta as object),
   };
 };

@@ -1,9 +1,12 @@
-import express, { Express } from 'express';
+import express from 'express';
 import cors from 'cors';
 import { Server } from 'http';
-import { PrismaClient } from '@prisma/client';
-import { SubscriptionBackendConfig, SubscriptionBackend, Logger } from './types';
-import { initializePrismaClient, testDatabaseConnection, disconnectPrisma } from './database/client';
+import { SubscriptionBackendConfig, SubscriptionBackend } from './types';
+import {
+  initializePrismaClient,
+  testDatabaseConnection,
+  disconnectPrisma,
+} from './database/client';
 import { createLogger } from './utils/logger';
 import { createPaymentAdapter } from './payment-adapters';
 import { createAuthMiddleware } from './middleware/auth';
@@ -78,14 +81,17 @@ export async function createSubscriptionBackend(
   app.use(tenantContextMiddleware());
 
   // API routes
-  app.use('/api/v1', createRoutes(
-    planService,
-    subscriptionService,
-    invoiceService,
-    paymentService,
-    usageService,
-    analyticsService
-  ));
+  app.use(
+    '/api/v1',
+    createRoutes(
+      planService,
+      subscriptionService,
+      invoiceService,
+      paymentService,
+      usageService,
+      analyticsService
+    )
+  );
 
   // Error handlers
   app.use(notFoundHandler);

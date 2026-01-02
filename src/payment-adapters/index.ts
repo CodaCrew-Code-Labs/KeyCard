@@ -8,7 +8,7 @@ export { DodoPaymentsAdapter };
  */
 export function createPaymentAdapter(
   provider: string,
-  config: any,
+  config: Record<string, unknown>,
   customProcessor?: PaymentAdapter
 ): PaymentAdapter {
   // If custom processor provided, use it

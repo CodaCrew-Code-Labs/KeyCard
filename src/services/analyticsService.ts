@@ -43,9 +43,9 @@ export class AnalyticsService {
 
   async getMRR(
     tenantId: string,
-    startDate?: Date,
-    endDate?: Date,
-    groupBy?: 'plan' | 'tenant'
+    _startDate?: Date,
+    _endDate?: Date,
+    _groupBy?: 'plan' | 'tenant'
   ): Promise<MRRResponse> {
     this.logger.info('Calculating MRR', { tenantId });
 
@@ -112,7 +112,7 @@ export class AnalyticsService {
     this.logger.info('Calculating churn rate', { tenantId, period });
 
     const now = new Date();
-    let periodStart = new Date();
+    const periodStart = new Date();
 
     switch (period) {
       case 'month':
@@ -237,10 +237,11 @@ export class AnalyticsService {
     switch (groupBy) {
       case 'day':
         return `${year}-${month}-${day}`;
-      case 'week':
+      case 'week': {
         // ISO week calculation (simplified)
         const weekNum = Math.ceil(date.getDate() / 7);
         return `${year}-W${String(weekNum).padStart(2, '0')}`;
+      }
       case 'month':
         return `${year}-${month}`;
       default:

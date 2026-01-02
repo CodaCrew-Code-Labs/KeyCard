@@ -1,11 +1,11 @@
-import { PrismaClient, WebhookEvent, WebhookEventStatus } from '@prisma/client';
+import { PrismaClient, Prisma, WebhookEvent } from '@prisma/client';
 import { Logger } from '../types';
 import crypto from 'crypto';
 
 export interface CreateWebhookEventInput {
   tenantId: string;
   eventType: string;
-  payload: any;
+  payload: Prisma.InputJsonValue;
 }
 
 export class WebhookService {
@@ -102,9 +102,12 @@ export class WebhookService {
       // Retry logic (max 3 attempts)
       if (event.deliveryAttempts < 3) {
         // Schedule retry after delay
-        setTimeout(() => {
-          this.deliverWebhook(eventId).catch(() => {});
-        }, Math.pow(2, event.deliveryAttempts) * 1000); // Exponential backoff
+        setTimeout(
+          () => {
+            this.deliverWebhook(eventId).catch(() => {});
+          },
+          Math.pow(2, event.deliveryAttempts) * 1000
+        ); // Exponential backoff
       }
     }
   }

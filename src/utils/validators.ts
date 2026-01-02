@@ -11,7 +11,7 @@ export const createPlanSchema = z.object({
   billing_interval_count: z.number().int().positive().default(1),
   trial_period_days: z.number().int().nonnegative().optional(),
   setup_fee: z.number().nonnegative().optional(),
-  features: z.record(z.any()).default({}),
+  features: z.record(z.unknown()).default({}),
 });
 
 export const updatePlanSchema = createPlanSchema.partial();
@@ -22,7 +22,7 @@ export const createSubscriptionSchema = z.object({
   plan_id: z.string().uuid(),
   quantity: z.number().int().positive().default(1),
   trial_period_days: z.number().int().nonnegative().optional(),
-  metadata: z.record(z.any()).default({}),
+  metadata: z.record(z.unknown()).default({}),
 });
 
 export const updateSubscriptionSchema = z.object({
@@ -46,13 +46,13 @@ export const createUsageSchema = z.object({
   metric_name: z.string().min(1),
   quantity: z.number().positive(),
   timestamp: z.string().datetime().optional(),
-  metadata: z.record(z.any()).default({}),
+  metadata: z.record(z.unknown()).default({}),
 });
 
 // Payment validation schemas
 export const createPaymentSchema = z.object({
   payment_method: z.string(),
-  metadata: z.record(z.any()).default({}),
+  metadata: z.record(z.unknown()).default({}),
 });
 
 export const refundPaymentSchema = z.object({
@@ -64,7 +64,7 @@ export const refundPaymentSchema = z.object({
 export const createTenantSchema = z.object({
   name: z.string().min(1).max(255),
   webhook_url: z.string().url().optional(),
-  settings: z.record(z.any()).default({}),
+  settings: z.record(z.unknown()).default({}),
 });
 
 // Pagination validation
@@ -74,6 +74,6 @@ export const paginationSchema = z.object({
 });
 
 // Helper function to validate data
-export function validate<T>(schema: z.ZodSchema<T>, data: any): T {
+export function validate<T>(schema: z.ZodSchema<T>, data: unknown): T {
   return schema.parse(data);
 }

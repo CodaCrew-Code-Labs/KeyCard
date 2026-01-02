@@ -7,7 +7,16 @@ import { UsageService } from '../services/usageService';
 import { AnalyticsService } from '../services/analyticsService';
 import { createPlanRoutes } from './plans';
 import { AuthenticatedRequest } from '../types';
-import { validate, createSubscriptionSchema, cancelSubscriptionSchema, pauseSubscriptionSchema, createUsageSchema, refundPaymentSchema, paginationSchema } from '../utils/validators';
+import { SubscriptionStatus, InvoiceStatus, PaymentStatus } from '@prisma/client';
+import {
+  validate,
+  createSubscriptionSchema,
+  cancelSubscriptionSchema,
+  pauseSubscriptionSchema,
+  createUsageSchema,
+  refundPaymentSchema,
+  paginationSchema,
+} from '../utils/validators';
 
 export function createRoutes(
   planService: PlanService,
@@ -53,7 +62,7 @@ export function createRoutes(
         page,
         limit,
         userId: req.query.user_id as string,
-        status: req.query.status as any,
+        status: req.query.status as SubscriptionStatus | undefined,
         planId: req.query.plan_id as string,
       });
 
@@ -75,7 +84,11 @@ export function createRoutes(
   subsRouter.post('/:id/cancel', async (req: AuthenticatedRequest, res, next) => {
     try {
       const data = validate(cancelSubscriptionSchema, req.body);
-      const subscription = await subscriptionService.cancel(req.params.id, req.auth!.tenantId, data);
+      const subscription = await subscriptionService.cancel(
+        req.params.id,
+        req.auth!.tenantId,
+        data
+      );
       res.json(subscription);
     } catch (error) {
       next(error);
@@ -120,7 +133,7 @@ export function createRoutes(
         limit,
         userId: req.query.user_id as string,
         subscriptionId: req.query.subscription_id as string,
-        status: req.query.status as any,
+        status: req.query.status as InvoiceStatus | undefined,
       });
 
       res.json(result);
@@ -155,7 +168,7 @@ export function createRoutes(
         limit,
         userId: req.query.user_id as string,
         invoiceId: req.query.invoice_id as string,
-        status: req.query.status as any,
+        status: req.query.status as PaymentStatus | undefined,
       });
 
       res.json(result);
@@ -248,7 +261,12 @@ export function createRoutes(
   analyticsRouter.get('/revenue', async (req: AuthenticatedRequest, res, next) => {
     try {
       const groupBy = req.query.group_by as 'day' | 'week' | 'month' | undefined;
-      const result = await analyticsService.getRevenue(req.auth!.tenantId, undefined, undefined, groupBy);
+      const result = await analyticsService.getRevenue(
+        req.auth!.tenantId,
+        undefined,
+        undefined,
+        groupBy
+      );
       res.json(result);
     } catch (error) {
       next(error);

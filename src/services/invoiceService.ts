@@ -1,5 +1,11 @@
-import { PrismaClient, Invoice, InvoiceStatus } from '@prisma/client';
-import { Logger, PaginationParams, PaginationResult, SubscriptionError, LifecycleHooks } from '../types';
+import { PrismaClient, Prisma, Invoice, InvoiceStatus } from '@prisma/client';
+import {
+  Logger,
+  PaginationParams,
+  PaginationResult,
+  SubscriptionError,
+  LifecycleHooks,
+} from '../types';
 import { generateInvoiceNumber } from '../utils/proration';
 
 export interface CreateInvoiceInput {
@@ -19,9 +25,9 @@ export interface CreateInvoiceInput {
     unitAmount: number;
     amount: number;
     proration?: boolean;
-    metadata?: Record<string, any>;
+    metadata?: Prisma.InputJsonValue;
   }>;
-  metadata?: Record<string, any>;
+  metadata?: Prisma.InputJsonValue;
 }
 
 export interface ListInvoicesFilters extends PaginationParams {
@@ -59,7 +65,7 @@ export class InvoiceService {
         dueDate: input.dueDate,
         periodStart: input.periodStart,
         periodEnd: input.periodEnd,
-        metadata: input.metadata || {},
+        metadata: input.metadata ?? Prisma.JsonNull,
         lineItems: {
           create: input.lineItems.map((item) => ({
             description: item.description,
@@ -67,7 +73,7 @@ export class InvoiceService {
             unitAmount: item.unitAmount,
             amount: item.amount,
             proration: item.proration || false,
-            metadata: item.metadata || {},
+            metadata: item.metadata ?? Prisma.JsonNull,
           })),
         },
       },
@@ -111,7 +117,12 @@ export class InvoiceService {
     const { page = 1, limit = 20, userId, subscriptionId, status } = filters;
     const skip = (page - 1) * limit;
 
-    const where: any = { tenantId };
+    const where: {
+      tenantId: string;
+      userId?: string;
+      subscriptionId?: string;
+      status?: InvoiceStatus;
+    } = { tenantId };
     if (userId) where.userId = userId;
     if (subscriptionId) where.subscriptionId = subscriptionId;
     if (status) where.status = status;
@@ -139,7 +150,7 @@ export class InvoiceService {
   }
 
   async markAsPaid(id: string, tenantId: string, amountPaid: number): Promise<Invoice> {
-    const invoice = await this.findById(id, tenantId);
+    await this.findById(id, tenantId);
 
     this.logger.info('Marking invoice as paid', { invoiceId: id });
 
@@ -159,7 +170,7 @@ export class InvoiceService {
   }
 
   async markAsUncollectible(id: string, tenantId: string): Promise<Invoice> {
-    const invoice = await this.findById(id, tenantId);
+    await this.findById(id, tenantId);
 
     this.logger.info('Marking invoice as uncollectible', { invoiceId: id });
 
@@ -176,11 +187,7 @@ export class InvoiceService {
     const invoice = await this.findById(id, tenantId);
 
     if (invoice.status === 'paid') {
-      throw new SubscriptionError(
-        'validation_error',
-        'Cannot void a paid invoice',
-        400
-      );
+      throw new SubscriptionError('validation_error', 'Cannot void a paid invoice', 400);
     }
 
     this.logger.info('Voiding invoice', { invoiceId: id });
