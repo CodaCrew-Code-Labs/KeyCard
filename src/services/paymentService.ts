@@ -41,12 +41,11 @@ export class PaymentService {
     this.logger.info('Creating payment', { userId: input.userId, amount: input.amount });
 
     try {
-      // Process payment through payment adapter
       const paymentResult = await this.paymentAdapter.createPayment({
         amount: input.amount,
         currency: input.currency,
         customerId: input.userId,
-        metadata: input.metadata,
+        metadata: input.metadata as Record<string, unknown>,
       });
 
       const payment = await this.prisma.payment.create({
@@ -66,7 +65,6 @@ export class PaymentService {
 
       this.logger.info('Payment created', { paymentId: payment.id, status: payment.status });
 
-      // If payment succeeded and linked to invoice, mark invoice as paid
       if (payment.status === 'succeeded' && input.invoiceId) {
         await this.prisma.invoice.update({
           where: { id: input.invoiceId },
@@ -78,7 +76,6 @@ export class PaymentService {
         });
       }
 
-      // Trigger hooks
       if (payment.status === 'succeeded' && this.hooks?.onPaymentSucceeded) {
         const subscription = input.invoiceId
           ? await this.prisma.subscription.findFirst({
@@ -101,7 +98,6 @@ export class PaymentService {
     } catch (error) {
       this.logger.error('Payment creation failed', error);
 
-      // Create failed payment record
       const payment = await this.prisma.payment.create({
         data: {
           tenantId: input.tenantId,

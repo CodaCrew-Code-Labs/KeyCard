@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { PricingModel } from '@prisma/client';
 import { PlanService } from '../services/planService';
 import { AuthenticatedRequest } from '../types';
 import {
@@ -8,11 +7,11 @@ import {
   updatePlanSchema,
   paginationSchema,
 } from '../utils/validators';
+import { Prisma, PricingModel } from '@prisma/client';
 
 export function createPlanRoutes(planService: PlanService): Router {
   const router = Router();
 
-  // POST /api/v1/plans
   router.post('/', async (req: AuthenticatedRequest, res, next) => {
     try {
       const data = validate(createPlanSchema, req.body);
@@ -27,7 +26,7 @@ export function createPlanRoutes(planService: PlanService): Router {
         billingIntervalCount: data.billing_interval_count,
         trialPeriodDays: data.trial_period_days,
         setupFee: data.setup_fee,
-        features: data.features,
+        features: data.features as Prisma.InputJsonValue,
       });
       res.status(201).json(plan);
     } catch (error) {
@@ -35,7 +34,6 @@ export function createPlanRoutes(planService: PlanService): Router {
     }
   });
 
-  // GET /api/v1/plans
   router.get('/', async (req: AuthenticatedRequest, res, next) => {
     try {
       const { page, limit } = validate(paginationSchema, {
@@ -52,7 +50,7 @@ export function createPlanRoutes(planService: PlanService): Router {
             : req.query.is_active === 'false'
               ? false
               : undefined,
-        pricingModel: req.query.pricing_model as PricingModel | undefined,
+        pricingModel: req.query.pricing_model as PricingModel,
       });
 
       res.json(result);
@@ -61,7 +59,6 @@ export function createPlanRoutes(planService: PlanService): Router {
     }
   });
 
-  // GET /api/v1/plans/:id
   router.get('/:id', async (req: AuthenticatedRequest, res, next) => {
     try {
       const plan = await planService.findById(req.params.id, req.auth!.tenantId);
@@ -71,18 +68,20 @@ export function createPlanRoutes(planService: PlanService): Router {
     }
   });
 
-  // PATCH /api/v1/plans/:id
   router.patch('/:id', async (req: AuthenticatedRequest, res, next) => {
     try {
       const data = validate(updatePlanSchema, req.body);
-      const plan = await planService.update(req.params.id, req.auth!.tenantId, data);
+      const updateData = {
+        ...data,
+        features: data.features as Prisma.InputJsonValue | undefined,
+      };
+      const plan = await planService.update(req.params.id, req.auth!.tenantId, updateData);
       res.json(plan);
     } catch (error) {
       next(error);
     }
   });
 
-  // DELETE /api/v1/plans/:id
   router.delete('/:id', async (req: AuthenticatedRequest, res, next) => {
     try {
       await planService.delete(req.params.id, req.auth!.tenantId);

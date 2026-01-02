@@ -3,23 +3,18 @@ import { DodoPaymentsAdapter, DodoPaymentsConfig } from './dodoPayments';
 
 export { DodoPaymentsAdapter };
 
-/**
- * Create payment adapter from configuration
- */
 export function createPaymentAdapter(
   provider: string,
   config: Record<string, unknown>,
   customProcessor?: PaymentAdapter
 ): PaymentAdapter {
-  // If custom processor provided, use it
   if (customProcessor) {
     return customProcessor;
   }
 
-  // Otherwise, create built-in adapter
   switch (provider.toLowerCase()) {
     case 'dodo_payments':
-      return new DodoPaymentsAdapter(config as DodoPaymentsConfig);
+      return new DodoPaymentsAdapter(config as unknown as DodoPaymentsConfig);
     default:
       throw new Error(`Unknown payment provider: ${provider}`);
   }

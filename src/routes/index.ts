@@ -7,7 +7,6 @@ import { UsageService } from '../services/usageService';
 import { AnalyticsService } from '../services/analyticsService';
 import { createPlanRoutes } from './plans';
 import { AuthenticatedRequest } from '../types';
-import { SubscriptionStatus, InvoiceStatus, PaymentStatus } from '@prisma/client';
 import {
   validate,
   createSubscriptionSchema,
@@ -17,6 +16,7 @@ import {
   refundPaymentSchema,
   paginationSchema,
 } from '../utils/validators';
+import { SubscriptionStatus, InvoiceStatus, PaymentStatus, Prisma } from '@prisma/client';
 
 export function createRoutes(
   planService: PlanService,
@@ -28,10 +28,8 @@ export function createRoutes(
 ): Router {
   const router = Router();
 
-  // Plans routes
   router.use('/plans', createPlanRoutes(planService));
 
-  // Subscriptions routes
   const subsRouter = Router();
 
   subsRouter.post('/', async (req: AuthenticatedRequest, res, next) => {
@@ -43,7 +41,7 @@ export function createRoutes(
         planId: data.plan_id,
         quantity: data.quantity,
         trialPeriodDays: data.trial_period_days,
-        metadata: data.metadata,
+        metadata: data.metadata as Prisma.InputJsonValue,
       });
       res.status(201).json(subscription);
     } catch (error) {
@@ -62,7 +60,7 @@ export function createRoutes(
         page,
         limit,
         userId: req.query.user_id as string,
-        status: req.query.status as SubscriptionStatus | undefined,
+        status: req.query.status as SubscriptionStatus,
         planId: req.query.plan_id as string,
       });
 
@@ -118,7 +116,6 @@ export function createRoutes(
 
   router.use('/subscriptions', subsRouter);
 
-  // Invoices routes
   const invoicesRouter = Router();
 
   invoicesRouter.get('/', async (req: AuthenticatedRequest, res, next) => {
@@ -133,7 +130,7 @@ export function createRoutes(
         limit,
         userId: req.query.user_id as string,
         subscriptionId: req.query.subscription_id as string,
-        status: req.query.status as InvoiceStatus | undefined,
+        status: req.query.status as InvoiceStatus,
       });
 
       res.json(result);
@@ -153,7 +150,6 @@ export function createRoutes(
 
   router.use('/invoices', invoicesRouter);
 
-  // Payments routes
   const paymentsRouter = Router();
 
   paymentsRouter.get('/', async (req: AuthenticatedRequest, res, next) => {
@@ -168,7 +164,7 @@ export function createRoutes(
         limit,
         userId: req.query.user_id as string,
         invoiceId: req.query.invoice_id as string,
-        status: req.query.status as PaymentStatus | undefined,
+        status: req.query.status as PaymentStatus,
       });
 
       res.json(result);
@@ -198,7 +194,6 @@ export function createRoutes(
 
   router.use('/payments', paymentsRouter);
 
-  // Usage routes
   const usageRouter = Router();
 
   usageRouter.post('/', async (req: AuthenticatedRequest, res, next) => {
@@ -211,7 +206,7 @@ export function createRoutes(
         metricName: data.metric_name,
         quantity: data.quantity,
         timestamp: data.timestamp ? new Date(data.timestamp) : undefined,
-        metadata: data.metadata,
+        metadata: data.metadata as Prisma.InputJsonValue,
       });
       res.status(201).json(usage);
     } catch (error) {
@@ -236,7 +231,6 @@ export function createRoutes(
 
   router.use('/usage', usageRouter);
 
-  // Analytics routes
   const analyticsRouter = Router();
 
   analyticsRouter.get('/mrr', async (req: AuthenticatedRequest, res, next) => {
@@ -275,8 +269,7 @@ export function createRoutes(
 
   router.use('/analytics', analyticsRouter);
 
-  // Health check
-  router.get('/health', (req, res) => {
+  router.get('/health', (_req, res) => {
     res.json({
       status: 'healthy',
       database: 'connected',

@@ -29,12 +29,10 @@ export class DodoPaymentsAdapter implements PaymentAdapter {
 
   async createPayment(params: CreatePaymentParams): Promise<CreatePaymentResult> {
     try {
-      // Simulate DoDo Payments API call
-      // In production, this would make actual HTTP request to DoDo Payments
       const response = await this.makeRequest('/v1/charges', {
         method: 'POST',
         body: {
-          amount: Math.round(params.amount * 100), // Convert to cents
+          amount: Math.round(params.amount * 100),
           currency: params.currency,
           customer_id: params.customerId,
           merchant_id: this.config.merchantId,
@@ -43,8 +41,8 @@ export class DodoPaymentsAdapter implements PaymentAdapter {
       });
 
       return {
-        paymentId: response.id || `dodo_${Date.now()}`,
-        status: this.mapStatus(response.status || 'success'),
+        paymentId: (response.id as string) || `dodo_${Date.now()}`,
+        status: this.mapStatus((response.status as string) || 'success'),
         providerResponse: response,
       };
     } catch (error) {
@@ -67,7 +65,7 @@ export class DodoPaymentsAdapter implements PaymentAdapter {
       });
 
       return {
-        refundId: response.id || `refund_${Date.now()}`,
+        refundId: (response.id as string) || `refund_${Date.now()}`,
         status: response.status === 'success' ? 'succeeded' : 'failed',
       };
     } catch (error) {
@@ -92,11 +90,10 @@ export class DodoPaymentsAdapter implements PaymentAdapter {
   }
 
   async processWebhook(payload: Record<string, unknown>): Promise<ProcessWebhookResult> {
-    // Parse DoDo Payments webhook format
     const data = payload.data as Record<string, unknown> | undefined;
     return {
       eventType: (payload.event_type as string) || 'payment.unknown',
-      paymentId: (data?.charge_id as string) || (data?.id as string),
+      paymentId: (data?.charge_id as string) || (data?.id as string) || '',
       status: this.mapStatus(data?.status as string),
       metadata: data,
     };
@@ -119,12 +116,8 @@ export class DodoPaymentsAdapter implements PaymentAdapter {
     endpoint: string,
     options: { method: string; body?: Record<string, unknown> }
   ): Promise<Record<string, unknown>> {
-    // This is a mock implementation
-    // In production, this would make actual HTTP requests to DoDo Payments API
-
     const url = `${this.config.baseUrl}${endpoint}`;
 
-    // Simulate successful response for development
     if (process.env.NODE_ENV === 'test' || process.env.MOCK_PAYMENTS === 'true') {
       return {
         id: `dodo_mock_${Date.now()}`,
@@ -133,7 +126,6 @@ export class DodoPaymentsAdapter implements PaymentAdapter {
       };
     }
 
-    // Actual implementation would use fetch or axios
     const response = await fetch(url, {
       method: options.method,
       headers: {
