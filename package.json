@@ -39,7 +39,7 @@
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
-    "node-cron": "^3.0.3",
+    "node-cron": "^4.2.1",
     "uuid": "^13.0.0",
     "winston": "^3.11.0",
     "zod": "^3.22.4"
