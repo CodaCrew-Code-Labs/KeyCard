@@ -51,7 +51,7 @@ export function errorHandler(error: Error, req: Request, res: Response, _next: N
       error: {
         code: 'validation_error',
         message: 'Invalid request data',
-        details: error.errors,
+        details: error.issues,
         requestId,
       },
     });

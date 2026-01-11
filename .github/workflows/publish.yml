@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'KeyCard/package.json'
+      - 'package.json'
 
 jobs:
   check-version:

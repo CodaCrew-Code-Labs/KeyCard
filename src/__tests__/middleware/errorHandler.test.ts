@@ -111,7 +111,6 @@ describe('Error Handler Middleware', () => {
         {
           code: 'invalid_type',
           expected: 'string',
-          received: 'number',
           path: ['email'],
           message: 'Expected string, received number',
         },
