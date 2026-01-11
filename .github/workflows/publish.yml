@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'package.json'
+      - 'KeyCard/package.json'
 
 jobs:
   check-version:
@@ -21,12 +21,13 @@ jobs:
 
       - name: Check if version changed
         id: check
+        working-directory: ./KeyCard
         run: |
           # Get current version from package.json
           CURRENT_VERSION=$(node -p "require('./package.json').version")
 
           # Get previous version from the commit before
-          git show HEAD~1:package.json > /tmp/old-package.json 2>/dev/null || echo '{"version":"0.0.0"}' > /tmp/old-package.json
+          git show HEAD~1:KeyCard/package.json > /tmp/old-package.json 2>/dev/null || echo '{"version":"0.0.0"}' > /tmp/old-package.json
           PREVIOUS_VERSION=$(node -p "require('/tmp/old-package.json').version")
 
           echo "Current version: $CURRENT_VERSION"
@@ -58,21 +59,27 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
+        working-directory: ./KeyCard
         run: npm ci
 
       - name: Run linter
+        working-directory: ./KeyCard
         run: npm run lint
 
       - name: Generate Prisma client
+        working-directory: ./KeyCard
         run: npm run prisma:generate
 
       - name: Run tests with coverage
+        working-directory: ./KeyCard
         run: npm run test:coverage
 
       - name: Build
+        working-directory: ./KeyCard
         run: npm run build
 
       - name: Publish to npm
+        working-directory: ./KeyCard
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
