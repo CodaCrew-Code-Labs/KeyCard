@@ -1,31 +1,18 @@
-import { PrismaClient } from '@prisma/client';
+// Create shared mock objects
+const mockUserMapping = {
+  findUnique: jest.fn(),
+  update: jest.fn(),
+};
 
-// Mock PrismaClient - use factory function to avoid hoisting issues
-jest.mock('@prisma/client', () => {
-  const mockUserMapping = {
-    findUnique: jest.fn(),
-    update: jest.fn(),
-  };
-  return {
-    PrismaClient: jest.fn().mockImplementation(() => ({
-      userMapping: mockUserMapping,
-    })),
-    __mockUserMapping: mockUserMapping,
-  };
-});
+// Mock getPrismaClient from database/client
+jest.mock('../../database/client', () => ({
+  getPrismaClient: jest.fn(() => ({
+    userMapping: mockUserMapping,
+  })),
+}));
 
 // Import after mocks
 import { WebhookUtils } from '../../utils/webhookUtils';
-
-// Get mock reference
-const mockPrismaClient = new PrismaClient();
-interface MockPrismaClient {
-  userMapping: {
-    findUnique: jest.Mock;
-    update: jest.Mock;
-  };
-}
-const mockUserMapping = (mockPrismaClient as unknown as MockPrismaClient).userMapping;
 
 describe('WebhookUtils', () => {
   beforeEach(() => {

@@ -1,21 +1,19 @@
 import express, { Express, Router } from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
 
-// Mock PrismaClient - use factory function to avoid hoisting issues
-jest.mock('@prisma/client', () => {
-  const mockUserMapping = {
-    findUnique: jest.fn(),
-    findMany: jest.fn(),
-    create: jest.fn(),
-  };
-  return {
-    PrismaClient: jest.fn().mockImplementation(() => ({
-      userMapping: mockUserMapping,
-    })),
-    __mockUserMapping: mockUserMapping,
-  };
-});
+// Create shared mock objects
+const mockUserMapping = {
+  findUnique: jest.fn(),
+  findMany: jest.fn(),
+  create: jest.fn(),
+};
+
+// Mock getPrismaClient from database/client
+jest.mock('../../database/client', () => ({
+  getPrismaClient: jest.fn(() => ({
+    userMapping: mockUserMapping,
+  })),
+}));
 
 // Mock uuid
 jest.mock('uuid', () => ({
@@ -33,17 +31,6 @@ jest.mock('../../routes/dodoPayments', () => ({
 
 // Import after mocks
 import { createRoutes } from '../../routes';
-
-// Get mock reference
-const mockPrismaClient = new PrismaClient();
-interface MockPrismaClient {
-  userMapping: {
-    findUnique: jest.Mock;
-    findMany: jest.Mock;
-    create: jest.Mock;
-  };
-}
-const mockUserMapping = (mockPrismaClient as unknown as MockPrismaClient).userMapping;
 
 describe('Main Routes', () => {
   let app: Express;

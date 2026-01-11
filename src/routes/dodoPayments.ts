@@ -2,10 +2,8 @@ import { Router } from 'express';
 import { DodoPaymentsService } from '../services/dodoPaymentsService';
 import { AuthenticatedRequest, CheckoutSessionData, CheckoutResponse, WebhookData } from '../types';
 import { WebhookUtils } from '../utils/webhookUtils';
-import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../database/client';
 import crypto from 'crypto';
-
-const prisma = new PrismaClient();
 
 export function createDodoPaymentsRoutes(): Router {
   const router = Router();
@@ -23,7 +21,7 @@ export function createDodoPaymentsRoutes(): Router {
       }
 
       // Check if user exists and has dodo_customer_id
-      const user = await prisma.userMapping.findUnique({
+      const user = await getPrismaClient().userMapping.findUnique({
         where: { email: customer_email },
       });
 
@@ -53,7 +51,7 @@ export function createDodoPaymentsRoutes(): Router {
 
       // Save session to database if user exists
       if (user) {
-        await prisma.session.create({
+        await getPrismaClient().session.create({
           data: {
             sessionId: session.session_id,
             sobCustomerId: user.userUuid,
@@ -89,7 +87,7 @@ export function createDodoPaymentsRoutes(): Router {
       // Update session status in database based on checkout status
       const checkoutData = checkout as unknown as CheckoutResponse;
       if (checkoutData.status) {
-        await prisma.session.updateMany({
+        await getPrismaClient().session.updateMany({
           where: { sessionId: id },
           data: { status: checkoutData.status },
         });
@@ -110,7 +108,7 @@ export function createDodoPaymentsRoutes(): Router {
         return res.status(400).json({ error: 'session ID is required' });
       }
 
-      const session = await prisma.session.findFirst({
+      const session = await getPrismaClient().session.findFirst({
         where: { sessionId },
         include: {
           user: {
@@ -244,7 +242,7 @@ async function updateCustomerIdFromWebhook(payload: WebhookData): Promise<void> 
     }
 
     // Find user by email and update dodo_customer_id only if it's null
-    const result = await prisma.userMapping.updateMany({
+    const result = await getPrismaClient().userMapping.updateMany({
       where: {
         email: customerEmail,
         dodoCustomerId: null,

@@ -1,7 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../database/client';
 import { WebhookData, CustomerData, PaymentData, SubscriptionData } from '../types';
-
-const prisma = new PrismaClient();
 
 export class WebhookUtils {
   /**
@@ -10,7 +8,7 @@ export class WebhookUtils {
   static async updateDodoCustomerId(email: string, dodoCustomerId: string): Promise<boolean> {
     try {
       // Find user by email
-      const user = await prisma.userMapping.findUnique({
+      const user = await getPrismaClient().userMapping.findUnique({
         where: { email },
       });
 
@@ -26,7 +24,7 @@ export class WebhookUtils {
       }
 
       // Update with new dodo_customer_id
-      await prisma.userMapping.update({
+      await getPrismaClient().userMapping.update({
         where: { email },
         data: { dodoCustomerId },
       });

@@ -14,9 +14,9 @@ const mockSession = {
   updateMany: jest.fn(),
 };
 
-// Mock PrismaClient - use factory function with shared mocks
-jest.mock('@prisma/client', () => ({
-  PrismaClient: jest.fn().mockImplementation(() => ({
+// Mock getPrismaClient from database/client
+jest.mock('../../database/client', () => ({
+  getPrismaClient: jest.fn(() => ({
     userMapping: mockUserMapping,
     session: mockSession,
   })),

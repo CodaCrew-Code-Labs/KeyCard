@@ -1,9 +1,7 @@
 import { Router } from 'express';
 import { createDodoPaymentsRoutes } from './dodoPayments';
-import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../database/client';
 import { v4 as uuidv4 } from 'uuid';
-
-const prisma = new PrismaClient();
 
 export function createRoutes(): Router {
   const router = Router();
@@ -19,7 +17,7 @@ export function createRoutes(): Router {
       }
 
       // Check if user exists
-      let user = await prisma.userMapping.findUnique({
+      let user = await getPrismaClient().userMapping.findUnique({
         where: { email },
       });
 
@@ -27,7 +25,7 @@ export function createRoutes(): Router {
       if (!user) {
         // Create new user with generated UUID
         const userUuid = uuidv4();
-        user = await prisma.userMapping.create({
+        user = await getPrismaClient().userMapping.create({
           data: {
             userUuid,
             email,
@@ -48,7 +46,7 @@ export function createRoutes(): Router {
 
   router.get('/users', async (req, res, next) => {
     try {
-      const users = await prisma.userMapping.findMany({
+      const users = await getPrismaClient().userMapping.findMany({
         select: {
           email: true,
         },
@@ -64,7 +62,7 @@ export function createRoutes(): Router {
     try {
       const { email } = req.params;
 
-      const user = await prisma.userMapping.findUnique({
+      const user = await getPrismaClient().userMapping.findUnique({
         where: { email },
       });
 
