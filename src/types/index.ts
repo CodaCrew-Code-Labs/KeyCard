@@ -35,10 +35,20 @@ export interface RateLimitConfig {
   max: number;
 }
 
+export interface PaymentConfig {
+  provider: 'dodo_payments';
+  config: {
+    apiKey: string;
+    environment?: 'test_mode' | 'live_mode';
+    webhookKey?: string;
+  };
+}
+
 export interface SubscriptionBackendConfig {
   port: number;
   database: DatabaseConfig;
   auth: AuthConfig;
+  payment?: PaymentConfig;
   features?: FeaturesConfig;
   cors?: CorsConfig;
   rateLimit?: RateLimitConfig;

@@ -32,6 +32,17 @@ export async function createSubscriptionBackend(
 
   logger.info('Database connected successfully');
 
+  // Initialize payment service
+  if (config.payment?.provider === 'dodo_payments') {
+    const { DodoPaymentsService } = await import('./services/dodoPaymentsService');
+    DodoPaymentsService.initialize(
+      config.payment.config.apiKey,
+      config.payment.config.environment || 'test_mode',
+      config.payment.config.webhookKey
+    );
+    logger.info('DodoPayments service initialized');
+  }
+
   // Create Express app
   const app = express();
 
