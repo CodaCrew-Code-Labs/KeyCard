@@ -17,21 +17,19 @@ A plug-and-play NPM package that provides a complete subscription management bac
 ## Installation
 
 ```bash
-npm install @keycard/subscription-backend
+npm install keycard-subscription-backend
 ```
 
 ## Quick Start
 
+### Option 1: As a Standalone Server
+
+Run the subscription backend as a separate service:
+
 ```typescript
-import { createSubscriptionBackend } from '@keycard/subscription-backend';
-import express from 'express';
+import { createSubscriptionBackend } from 'keycard-subscription-backend';
 
-const app = express();
-
-// Your main application routes
-app.get('/', (req, res) => res.send('Main app'));
-
-// Initialize subscription backend
+// Initialize and start subscription backend server
 const subscriptionBackend = await createSubscriptionBackend({
   port: 4000,
   database: {
@@ -58,9 +56,99 @@ const subscriptionBackend = await createSubscriptionBackend({
   },
 });
 
-// Start main app
-app.listen(3000, () => console.log('Main app on 3000'));
-// Subscription backend automatically runs on port 4000
+// Server automatically starts on port 4000
+console.log('Subscription backend running on port 4000');
+```
+
+### Option 2: Integrated with Your Express App
+
+Mount the subscription routes in your existing Express application:
+
+```typescript
+import express from 'express';
+import { createSubscriptionRoutes, initializePrismaClient } from 'keycard-subscription-backend';
+
+const app = express();
+
+// Your existing routes
+app.get('/', (req, res) => res.send('Main app'));
+
+// Initialize database
+await initializePrismaClient({
+  url: process.env.DATABASE_URL,
+});
+
+// Mount subscription routes
+const subscriptionRoutes = createSubscriptionRoutes({
+  payment: {
+    provider: 'dodo_payments',
+    config: {
+      apiKey: process.env.DODO_API_KEY,
+      apiSecret: process.env.DODO_API_SECRET,
+      merchantId: process.env.DODO_MERCHANT_ID,
+    },
+  },
+  auth: {
+    validateRequest: async (req) => {
+      const token = req.headers.authorization?.replace('Bearer ', '');
+      const user = await yourAuthService.verify(token);
+      return {
+        userId: user.id,
+        tenantId: user.tenantId,
+        isValid: !!user,
+      };
+    },
+  },
+});
+
+// Mount at /api/v1/subscriptions
+app.use('/api/v1', subscriptionRoutes);
+
+// Start your app
+app.listen(3000, () => console.log('App with subscriptions on port 3000'));
+```
+
+### Option 3: Microservice Architecture
+
+Deploy as a separate microservice and communicate via HTTP:
+
+```typescript
+// subscription-service.js
+import { createSubscriptionBackend } from 'keycard-subscription-backend';
+
+const subscriptionService = await createSubscriptionBackend({
+  port: process.env.PORT || 4000,
+  database: {
+    url: process.env.DATABASE_URL,
+  },
+  // ... other config
+});
+
+// main-app.js
+import axios from 'axios';
+
+const SUBSCRIPTION_SERVICE_URL = 'http://subscription-service:4000';
+
+// Create subscription from your main app
+app.post('/subscribe', async (req, res) => {
+  try {
+    const response = await axios.post(
+      `${SUBSCRIPTION_SERVICE_URL}/api/v1/subscriptions`,
+      {
+        user_id: req.user.id,
+        plan_id: req.body.planId,
+      },
+      {
+        headers: {
+          Authorization: req.headers.authorization,
+        },
+      }
+    );
+    res.json(response.data);
+  } catch (error) {
+    res.status(500).json({ error: 'Subscription failed' });
+  }
+});
 ```
 
 ## Configuration
@@ -223,10 +311,23 @@ curl -X POST http://localhost:4000/api/v1/usage \
 Instead of HTTP requests, use the package programmatically:
 
 ```typescript
+import { 
+  createSubscriptionBackend, 
+  getSubscriptionServices 
+} from 'keycard-subscription-backend';
+
+// Option 1: Get services from backend instance
 const backend = await createSubscriptionBackend({ /* config */ });
+const services = backend.services;
+
+// Option 2: Get services directly (for integrated apps)
+const services = await getSubscriptionServices({
+  database: { url: process.env.DATABASE_URL },
+  payment: { /* payment config */ },
+});
 
 // Create a plan
-const plan = await backend.services.plans.create({
+const plan = await services.plans.create({
   tenantId: 'tenant_xyz',
   name: 'Enterprise',
   pricingModel: 'flat',
@@ -236,7 +337,7 @@ const plan = await backend.services.plans.create({
 });
 
 // Subscribe a user
-const subscription = await backend.services.subscriptions.create({
+const subscription = await services.subscriptions.create({
   tenantId: 'tenant_xyz',
   userId: 'user_456',
   planId: plan.id,
@@ -244,10 +345,10 @@ const subscription = await backend.services.subscriptions.create({
 });
 
 // Check subscription status
-const isActive = await backend.services.subscriptions.isActive('sub_xyz789');
+const isActive = await services.subscriptions.isActive('sub_xyz789');
 
 // Get MRR analytics
-const mrr = await backend.services.analytics.getMRR('tenant_xyz');
+const mrr = await services.analytics.getMRR('tenant_xyz');
 console.log(`Current MRR: $${mrr.currentMrr}`);
 ```
 
