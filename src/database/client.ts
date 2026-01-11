@@ -1,7 +1,10 @@
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import pg from 'pg';
 import { DatabaseConfig, Logger } from '../types';
 
 let prismaClient: PrismaClient | null = null;
+let pool: pg.Pool | null = null;
 
 /**
  * Initialize Prisma client with configuration
@@ -30,26 +33,24 @@ export function initializePrismaClient(config: DatabaseConfig, logger: Logger): 
   // Set environment variable for Prisma
   process.env.DATABASE_URL = databaseUrl;
 
-  prismaClient = new PrismaClient({
-    log: [
-      { emit: 'event', level: 'query' },
-      { emit: 'event', level: 'error' },
-      { emit: 'event', level: 'warn' },
-    ],
+  // Create PostgreSQL connection pool and adapter for Prisma 7
+  pool = new pg.Pool({ connectionString: databaseUrl });
+
+  // Set up pg pool-level logging
+  pool.on('connect', () => {
+    logger.debug('New PostgreSQL client connected to pool');
   });
 
-  // Log queries in debug mode
-  prismaClient.$on('query' as never, (e: { query: string; params: string }) => {
-    logger.debug('Prisma Query', { query: e.query, params: e.params });
+  pool.on('error', (err: Error) => {
+    logger.error('PostgreSQL pool error', { error: err.message });
   });
 
-  prismaClient.$on('error' as never, (e: { message: string }) => {
-    logger.error('Prisma Error', e);
+  pool.on('remove', () => {
+    logger.debug('PostgreSQL client removed from pool');
   });
 
-  prismaClient.$on('warn' as never, (e: { message: string }) => {
-    logger.warn('Prisma Warning', e);
-  });
+  const adapter = new PrismaPg(pool);
+  prismaClient = new PrismaClient({ adapter });
 
   return prismaClient;
 }
@@ -71,6 +72,10 @@ export async function disconnectPrisma(): Promise<void> {
   if (prismaClient) {
     await prismaClient.$disconnect();
     prismaClient = null;
+  }
+  if (pool) {
+    await pool.end();
+    pool = null;
   }
 }
 
