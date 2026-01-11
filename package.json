@@ -41,7 +41,7 @@
     "express-rate-limit": "^8.2.1",
     "uuid": "^13.0.0",
     "winston": "^3.11.0",
-    "zod": "^3.22.4"
+    "zod": "^4.3.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
