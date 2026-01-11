@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/client';
 import { ZodError } from 'zod';
 import { SubscriptionError } from '../types';
 import { v4 as uuidv4 } from 'uuid';

@@ -23,5 +23,6 @@ export function createRateLimiter(config?: RateLimitConfig) {
     },
     standardHeaders: true,
     legacyHeaders: false,
+    validate: false,
   });
 }

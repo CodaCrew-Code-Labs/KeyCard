@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { SubscriptionError } from '../../types';
-import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/client';
 import { ZodError, ZodIssue } from 'zod';
 
 // Mock uuid

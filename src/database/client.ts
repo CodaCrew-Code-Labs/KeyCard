@@ -31,11 +31,6 @@ export function initializePrismaClient(config: DatabaseConfig, logger: Logger): 
   process.env.DATABASE_URL = databaseUrl;
 
   prismaClient = new PrismaClient({
-    datasources: {
-      db: {
-        url: databaseUrl,
-      },
-    },
     log: [
       { emit: 'event', level: 'query' },
       { emit: 'event', level: 'error' },
