@@ -8,20 +8,11 @@ import {
   disconnectPrisma,
 } from './database/client';
 import { createLogger } from './utils/logger';
-import { createPaymentAdapter } from './payment-adapters';
 import { createAuthMiddleware } from './middleware/auth';
 import { tenantContextMiddleware } from './middleware/tenantContext';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { createRateLimiter } from './middleware/rateLimiter';
-import { PlanService } from './services/planService';
-import { SubscriptionService } from './services/subscriptionService';
-import { InvoiceService } from './services/invoiceService';
-import { PaymentService } from './services/paymentService';
-import { UsageService } from './services/usageService';
-import { AnalyticsService } from './services/analyticsService';
-import { WebhookService } from './services/webhookService';
 import { createRoutes } from './routes';
-import { BillingCycleJob } from './jobs/billingCycle';
 
 export async function createSubscriptionBackend(
   config: SubscriptionBackendConfig
@@ -31,7 +22,7 @@ export async function createSubscriptionBackend(
   logger.info('Initializing subscription backend');
 
   // Initialize database
-  const prisma = initializePrismaClient(config.database, logger);
+  initializePrismaClient(config.database, logger);
 
   // Test database connection
   const connected = await testDatabaseConnection(logger);
@@ -39,23 +30,7 @@ export async function createSubscriptionBackend(
     throw new Error('Failed to connect to database');
   }
 
-  // Create payment adapter
-  const paymentAdapter = createPaymentAdapter(
-    config.payment.provider,
-    config.payment.config,
-    config.payment.customProcessor
-  );
-
-  logger.info(`Using payment provider: ${paymentAdapter.name}`);
-
-  // Initialize services
-  const planService = new PlanService(prisma, logger);
-  const subscriptionService = new SubscriptionService(prisma, logger, config.hooks);
-  const invoiceService = new InvoiceService(prisma, logger, config.hooks);
-  const paymentService = new PaymentService(prisma, logger, paymentAdapter, config.hooks);
-  const usageService = new UsageService(prisma, logger);
-  const analyticsService = new AnalyticsService(prisma, logger);
-  const webhookService = new WebhookService(prisma, logger);
+  logger.info('Database connected successfully');
 
   // Create Express app
   const app = express();
@@ -81,24 +56,11 @@ export async function createSubscriptionBackend(
   app.use(tenantContextMiddleware());
 
   // API routes
-  app.use(
-    '/api/v1',
-    createRoutes(
-      planService,
-      subscriptionService,
-      invoiceService,
-      paymentService,
-      usageService,
-      analyticsService
-    )
-  );
+  app.use('/api/v1', createRoutes());
 
   // Error handlers
   app.use(notFoundHandler);
   app.use(errorHandler);
-
-  // Initialize background jobs
-  let billingJob: BillingCycleJob | null = null;
 
   if (config.features?.autoMigration) {
     logger.info('Auto-migration enabled');
@@ -114,15 +76,6 @@ export async function createSubscriptionBackend(
   const backend: SubscriptionBackend = {
     app,
     server,
-    services: {
-      plans: planService,
-      subscriptions: subscriptionService,
-      invoices: invoiceService,
-      payments: paymentService,
-      usage: usageService,
-      analytics: analyticsService,
-      webhooks: webhookService,
-    },
 
     async start() {
       if (server) {
@@ -134,10 +87,6 @@ export async function createSubscriptionBackend(
         logger.info(`Subscription backend listening on port ${config.port}`);
       });
 
-      // Start background jobs
-      billingJob = new BillingCycleJob(prisma, invoiceService, paymentService, logger);
-      billingJob.start();
-
       backend.server = server;
     },
 
@@ -145,11 +94,6 @@ export async function createSubscriptionBackend(
       if (!server) {
         logger.warn('Server is not running');
         return;
-      }
-
-      // Stop background jobs
-      if (billingJob) {
-        billingJob.stop();
       }
 
       // Close server

@@ -1,13 +1,6 @@
 import { Request, Application } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { Server } from 'http';
-import type { PlanService } from '../services/planService';
-import type { SubscriptionService } from '../services/subscriptionService';
-import type { InvoiceService } from '../services/invoiceService';
-import type { PaymentService } from '../services/paymentService';
-import type { UsageService } from '../services/usageService';
-import type { AnalyticsService } from '../services/analyticsService';
-import type { WebhookService } from '../services/webhookService';
 
 // Configuration types
 export interface DatabaseConfig {
@@ -23,28 +16,13 @@ export interface DatabaseConfig {
   prismaClient?: PrismaClient;
 }
 
-export interface PaymentConfig {
-  provider: string;
-  config: Record<string, unknown>;
-  customProcessor?: PaymentAdapter;
-}
-
 export interface AuthConfig {
   validateRequest: (req: Request) => Promise<AuthValidationResult>;
-}
-
-export interface DunningConfig {
-  enabled: boolean;
-  retrySchedule: number[];
-  emailProvider?: string;
-  emailConfig?: Record<string, unknown>;
 }
 
 export interface FeaturesConfig {
   autoMigration?: boolean;
   webhooks?: boolean;
-  analytics?: boolean;
-  dunning?: DunningConfig;
 }
 
 export interface CorsConfig {
@@ -57,24 +35,13 @@ export interface RateLimitConfig {
   max: number;
 }
 
-export interface LifecycleHooks {
-  onSubscriptionCreated?: (subscription: unknown) => Promise<void>;
-  onSubscriptionUpdated?: (subscription: unknown) => Promise<void>;
-  onSubscriptionCanceled?: (subscription: unknown) => Promise<void>;
-  onPaymentFailed?: (payment: unknown, subscription: unknown) => Promise<void>;
-  onPaymentSucceeded?: (payment: unknown, subscription: unknown) => Promise<void>;
-  onInvoiceGenerated?: (invoice: unknown) => Promise<void>;
-}
-
 export interface SubscriptionBackendConfig {
   port: number;
   database: DatabaseConfig;
-  payment: PaymentConfig;
   auth: AuthConfig;
   features?: FeaturesConfig;
   cors?: CorsConfig;
   rateLimit?: RateLimitConfig;
-  hooks?: LifecycleHooks;
   logger?: Logger;
 }
 
@@ -89,68 +56,6 @@ export interface AuthenticatedRequest extends Request {
   auth?: AuthValidationResult;
 }
 
-// Payment Adapter types
-export interface CreatePaymentParams {
-  amount: number;
-  currency: string;
-  customerId: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface CreatePaymentResult {
-  paymentId: string;
-  status: 'pending' | 'succeeded' | 'failed';
-  providerResponse: Record<string, unknown>;
-}
-
-export interface RefundPaymentParams {
-  paymentId: string;
-  amount?: number;
-  reason?: string;
-}
-
-export interface RefundPaymentResult {
-  refundId: string;
-  status: 'succeeded' | 'failed';
-}
-
-export interface VerifyWebhookParams {
-  payload: string;
-  signature: string;
-  secret: string;
-}
-
-export interface ProcessWebhookResult {
-  eventType: string;
-  paymentId: string;
-  status: string;
-  metadata: Record<string, unknown> | undefined;
-}
-
-export interface PaymentAdapter {
-  name: string;
-  createPayment(params: CreatePaymentParams): Promise<CreatePaymentResult>;
-  refundPayment(params: RefundPaymentParams): Promise<RefundPaymentResult>;
-  verifyWebhook(params: VerifyWebhookParams): boolean;
-  processWebhook(payload: Record<string, unknown>): Promise<ProcessWebhookResult>;
-}
-
-// Service types
-export interface PaginationParams {
-  page?: number;
-  limit?: number;
-}
-
-export interface PaginationResult<T> {
-  data: T[];
-  pagination: {
-    page: number;
-    limit: number;
-    total: number;
-    totalPages: number;
-  };
-}
-
 // Logger interface
 export interface Logger {
   info(message: string, meta?: unknown): void;
@@ -163,28 +68,56 @@ export interface Logger {
 export interface SubscriptionBackend {
   app: Application;
   server: Server | null;
-  services: {
-    plans: PlanService;
-    subscriptions: SubscriptionService;
-    invoices: InvoiceService;
-    payments: PaymentService;
-    usage: UsageService;
-    analytics: AnalyticsService;
-    webhooks: WebhookService;
-  };
   start(): Promise<void>;
   stop(): Promise<void>;
   restart(): Promise<void>;
 }
 
-// API Error types
-export interface ApiError {
-  code: string;
-  message: string;
-  details?: Record<string, unknown>;
-  requestId?: string;
+// DodoPayments API types
+export interface CheckoutSessionData {
+  product_cart: Array<{
+    product_id: string;
+    quantity: number;
+  }>;
+  return_url?: string;
+  customer?: {
+    customer_id?: string;
+    email?: string;
+  };
+  metadata?: Record<string, string>;
 }
 
+export interface CheckoutResponse {
+  session_id: string;
+  checkout_url: string;
+  status?: string;
+}
+
+// Webhook types
+export interface WebhookData {
+  event_type: string;
+  data: Record<string, unknown>;
+}
+
+export interface CustomerData {
+  customer_id?: string;
+  email?: string;
+}
+
+export interface PaymentData {
+  payment_id?: string;
+  amount?: number;
+  currency?: string;
+  status?: string;
+}
+
+export interface SubscriptionData {
+  subscription_id?: string;
+  customer_id?: string;
+  status?: string;
+}
+
+// API Error types
 export class SubscriptionError extends Error {
   constructor(
     public code: string,

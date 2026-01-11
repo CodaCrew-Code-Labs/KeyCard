@@ -9,233 +9,27 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Tenant {
-  id             String   @id @default(uuid())
-  name           String
-  apiKey         String   @unique @map("api_key")
-  webhookUrl     String?  @map("webhook_url")
-  webhookSecret  String?  @map("webhook_secret")
-  settings       Json     @default("{}")
+model UserMapping {
+  userUuid       String   @id @map("user_uuid")
+  email          String   @unique
+  dodoCustomerId String?  @map("dodo_customer_id")
   createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  sessions       Session[]
 
-  plans          SubscriptionPlan[]
-  subscriptions  Subscription[]
-  invoices       Invoice[]
-  payments       Payment[]
-  usageRecords   UsageRecord[]
-  webhookEvents  WebhookEvent[]
-
-  @@map("tenants")
+  @@map("user_mapping")
 }
 
-enum PricingModel {
-  flat
-  tiered
-  per_seat
-  usage_based
-}
+model Session {
+  id            String   @id @default(cuid())
+  sessionId     String   @map("session_id")
+  sobCustomerId String   @map("sob_customer_id")
+  status        String
+  createdAt     DateTime @default(now()) @map("created_date")
+  
+  // Relations
+  user          UserMapping @relation(fields: [sobCustomerId], references: [userUuid])
 
-enum BillingInterval {
-  day
-  week
-  month
-  year
-}
-
-model SubscriptionPlan {
-  id                    String          @id @default(uuid())
-  tenantId              String          @map("tenant_id")
-  name                  String
-  description           String?
-  pricingModel          PricingModel    @map("pricing_model")
-  amount                Decimal         @db.Decimal(10, 2)
-  currency              String          @default("USD")
-  billingInterval       BillingInterval @map("billing_interval")
-  billingIntervalCount  Int             @default(1) @map("billing_interval_count")
-  trialPeriodDays       Int?            @map("trial_period_days")
-  setupFee              Decimal?        @db.Decimal(10, 2) @map("setup_fee")
-  features              Json            @default("{}")
-  isActive              Boolean         @default(true) @map("is_active")
-  createdAt             DateTime        @default(now()) @map("created_at")
-  updatedAt             DateTime        @updatedAt @map("updated_at")
-
-  tenant                Tenant          @relation(fields: [tenantId], references: [id])
-  subscriptions         Subscription[]
-
-  @@index([tenantId])
-  @@index([isActive])
-  @@map("subscription_plans")
-}
-
-enum SubscriptionStatus {
-  trialing
-  active
-  past_due
-  canceled
-  paused
-  expired
-}
-
-model Subscription {
-  id                  String             @id @default(uuid())
-  tenantId            String             @map("tenant_id")
-  userId              String             @map("user_id")
-  planId              String             @map("plan_id")
-  status              SubscriptionStatus
-  currentPeriodStart  DateTime           @map("current_period_start")
-  currentPeriodEnd    DateTime           @map("current_period_end")
-  trialStart          DateTime?          @map("trial_start")
-  trialEnd            DateTime?          @map("trial_end")
-  canceledAt          DateTime?          @map("canceled_at")
-  endedAt             DateTime?          @map("ended_at")
-  quantity            Int                @default(1)
-  metadata            Json               @default("{}")
-  createdAt           DateTime           @default(now()) @map("created_at")
-  updatedAt           DateTime           @updatedAt @map("updated_at")
-
-  tenant              Tenant             @relation(fields: [tenantId], references: [id])
-  plan                SubscriptionPlan   @relation(fields: [planId], references: [id])
-  invoices            Invoice[]
-  usageRecords        UsageRecord[]
-
-  @@index([tenantId])
-  @@index([userId])
-  @@index([status])
-  @@map("subscriptions")
-}
-
-enum InvoiceStatus {
-  draft
-  open
-  paid
-  void
-  uncollectible
-}
-
-model Invoice {
-  id              String        @id @default(uuid())
-  tenantId        String        @map("tenant_id")
-  subscriptionId  String        @map("subscription_id")
-  userId          String        @map("user_id")
-  invoiceNumber   String        @unique @map("invoice_number")
-  amountDue       Decimal       @db.Decimal(10, 2) @map("amount_due")
-  amountPaid      Decimal       @default(0) @db.Decimal(10, 2) @map("amount_paid")
-  currency        String
-  status          InvoiceStatus
-  taxAmount       Decimal       @default(0) @db.Decimal(10, 2) @map("tax_amount")
-  subtotal        Decimal       @db.Decimal(10, 2)
-  total           Decimal       @db.Decimal(10, 2)
-  dueDate         DateTime      @map("due_date")
-  paidAt          DateTime?     @map("paid_at")
-  periodStart     DateTime      @map("period_start")
-  periodEnd       DateTime      @map("period_end")
-  metadata        Json          @default("{}")
-  createdAt       DateTime      @default(now()) @map("created_at")
-  updatedAt       DateTime      @updatedAt @map("updated_at")
-
-  tenant          Tenant        @relation(fields: [tenantId], references: [id])
-  subscription    Subscription  @relation(fields: [subscriptionId], references: [id])
-  lineItems       InvoiceItem[]
-  payments        Payment[]
-
-  @@index([tenantId])
-  @@index([subscriptionId])
-  @@index([userId])
-  @@index([status])
-  @@map("invoices")
-}
-
-model InvoiceItem {
-  id          String   @id @default(uuid())
-  invoiceId   String   @map("invoice_id")
-  description String
-  quantity    Int
-  unitAmount  Decimal  @db.Decimal(10, 2) @map("unit_amount")
-  amount      Decimal  @db.Decimal(10, 2)
-  proration   Boolean  @default(false)
-  metadata    Json     @default("{}")
-
-  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-
-  @@index([invoiceId])
-  @@map("invoice_items")
-}
-
-enum PaymentStatus {
-  pending
-  succeeded
-  failed
-  refunded
-}
-
-model Payment {
-  id                   String        @id @default(uuid())
-  tenantId             String        @map("tenant_id")
-  invoiceId            String?       @map("invoice_id")
-  userId               String        @map("user_id")
-  amount               Decimal       @db.Decimal(10, 2)
-  currency             String
-  status               PaymentStatus
-  paymentProvider      String        @map("payment_provider")
-  providerPaymentId    String?       @map("provider_payment_id")
-  paymentMethodDetails Json          @default("{}") @map("payment_method_details")
-  failureReason        String?       @map("failure_reason")
-  refundedAmount       Decimal       @default(0) @db.Decimal(10, 2) @map("refunded_amount")
-  metadata             Json          @default("{}")
-  createdAt            DateTime      @default(now()) @map("created_at")
-  updatedAt            DateTime      @updatedAt @map("updated_at")
-
-  tenant               Tenant        @relation(fields: [tenantId], references: [id])
-  invoice              Invoice?      @relation(fields: [invoiceId], references: [id])
-
-  @@index([tenantId])
-  @@index([userId])
-  @@index([status])
-  @@map("payments")
-}
-
-model UsageRecord {
-  id             String       @id @default(uuid())
-  tenantId       String       @map("tenant_id")
-  subscriptionId String       @map("subscription_id")
-  userId         String       @map("user_id")
-  metricName     String       @map("metric_name")
-  quantity       Decimal      @db.Decimal(10, 2)
-  timestamp      DateTime     @default(now())
-  metadata       Json         @default("{}")
-
-  tenant         Tenant       @relation(fields: [tenantId], references: [id])
-  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
-
-  @@index([tenantId])
-  @@index([subscriptionId])
-  @@index([metricName])
-  @@index([timestamp])
-  @@map("usage_records")
-}
-
-enum WebhookEventStatus {
-  pending
-  delivered
-  failed
-}
-
-model WebhookEvent {
-  id              String             @id @default(uuid())
-  tenantId        String             @map("tenant_id")
-  eventType       String             @map("event_type")
-  payload         Json
-  deliveryAttempts Int               @default(0) @map("delivery_attempts")
-  lastAttemptAt   DateTime?          @map("last_attempt_at")
-  deliveredAt     DateTime?          @map("delivered_at")
-  status          WebhookEventStatus
-  errorMessage    String?            @map("error_message")
-  createdAt       DateTime           @default(now()) @map("created_at")
-
-  tenant          Tenant             @relation(fields: [tenantId], references: [id])
-
-  @@index([tenantId])
-  @@index([status])
-  @@map("webhook_events")
+  @@map("sessions")
 }
