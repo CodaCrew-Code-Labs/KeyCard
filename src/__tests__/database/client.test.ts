@@ -1,27 +1,45 @@
 import { Logger } from '../../types';
 import { PrismaClient } from '@prisma/client';
-import * as clientModule from '../../database/client';
 
-// Create mock client that will be used by all instances
-const mockPrismaClient = {
-  $connect: jest.fn(),
-  $disconnect: jest.fn(),
-  $queryRaw: jest.fn(),
-  $on: jest.fn(),
+// Mock pg Pool
+const mockPoolOn = jest.fn();
+const mockPoolEnd = jest.fn().mockResolvedValue(undefined);
+const mockPool = {
+  on: mockPoolOn,
+  end: mockPoolEnd,
 };
 
-// Mock PrismaClient - needs to be defined before any imports
-jest.mock('@prisma/client', () => ({
-  PrismaClient: jest.fn().mockImplementation(() => mockPrismaClient),
+jest.mock('pg', () => ({
+  Pool: jest.fn().mockImplementation(() => mockPool),
 }));
 
-// Mock the client module
-jest.mock('../../database/client');
+// Mock PrismaPg adapter
+jest.mock('@prisma/adapter-pg', () => ({
+  PrismaPg: jest.fn().mockImplementation(() => ({})),
+}));
+
+// Mock PrismaClient
+const mockDisconnect = jest.fn().mockResolvedValue(undefined);
+const mockQueryRaw = jest.fn();
+jest.mock('@prisma/client', () => ({
+  PrismaClient: jest.fn().mockImplementation(() => ({
+    $disconnect: mockDisconnect,
+    $queryRaw: mockQueryRaw,
+  })),
+}));
+
+// Import after mocks are set up
+import {
+  initializePrismaClient,
+  getPrismaClient,
+  disconnectPrisma,
+  testDatabaseConnection,
+  runMigrations,
+} from '../../database/client';
 
 describe('Database Client', () => {
   let mockLogger: Logger;
   const originalEnv = process.env;
-  const mockedClientModule = clientModule as jest.Mocked<typeof clientModule>;
 
   beforeEach(() => {
     mockLogger = {
@@ -31,8 +49,9 @@ describe('Database Client', () => {
       debug: jest.fn(),
     };
 
-    process.env = { ...originalEnv };
+    // Reset module state by clearing mocks
     jest.clearAllMocks();
+    process.env = { ...originalEnv };
   });
 
   afterAll(() => {
@@ -42,37 +61,23 @@ describe('Database Client', () => {
   describe('initializePrismaClient', () => {
     it('should use provided prismaClient when available', () => {
       const customClient = { custom: true } as unknown as PrismaClient;
-      mockedClientModule.initializePrismaClient.mockReturnValue(customClient);
 
-      const result = mockedClientModule.initializePrismaClient(
-        { prismaClient: customClient },
-        mockLogger
-      );
+      const result = initializePrismaClient({ prismaClient: customClient }, mockLogger);
 
       expect(result).toBe(customClient);
     });
 
     it('should create PrismaClient with URL config', () => {
-      mockedClientModule.initializePrismaClient.mockReturnValue(
-        mockPrismaClient as unknown as PrismaClient
-      );
-
-      mockedClientModule.initializePrismaClient(
+      const result = initializePrismaClient(
         { url: 'postgresql://user:pass@localhost:5432/testdb' },
         mockLogger
       );
 
-      expect(mockedClientModule.initializePrismaClient).toHaveBeenCalledWith(
-        { url: 'postgresql://user:pass@localhost:5432/testdb' },
-        mockLogger
-      );
+      expect(result).toBeDefined();
+      expect(process.env.DATABASE_URL).toBe('postgresql://user:pass@localhost:5432/testdb');
     });
 
     it('should create PrismaClient with host/database config', () => {
-      mockedClientModule.initializePrismaClient.mockReturnValue(
-        mockPrismaClient as unknown as PrismaClient
-      );
-
       const config = {
         host: 'localhost',
         port: 5432,
@@ -81,16 +86,13 @@ describe('Database Client', () => {
         password: 'testpass',
       };
 
-      mockedClientModule.initializePrismaClient(config, mockLogger);
+      const result = initializePrismaClient(config, mockLogger);
 
-      expect(mockedClientModule.initializePrismaClient).toHaveBeenCalledWith(config, mockLogger);
+      expect(result).toBeDefined();
+      expect(process.env.DATABASE_URL).toBe('postgresql://testuser:testpass@localhost:5432/testdb');
     });
 
     it('should create PrismaClient with SSL enabled', () => {
-      mockedClientModule.initializePrismaClient.mockReturnValue(
-        mockPrismaClient as unknown as PrismaClient
-      );
-
       const config = {
         host: 'localhost',
         database: 'testdb',
@@ -98,146 +100,154 @@ describe('Database Client', () => {
         ssl: true,
       };
 
-      mockedClientModule.initializePrismaClient(config, mockLogger);
+      const result = initializePrismaClient(config, mockLogger);
 
-      expect(mockedClientModule.initializePrismaClient).toHaveBeenCalledWith(config, mockLogger);
+      expect(result).toBeDefined();
+      expect(process.env.DATABASE_URL).toContain('?sslmode=require');
     });
 
     it('should use default port 5432 when not specified', () => {
-      mockedClientModule.initializePrismaClient.mockReturnValue(
-        mockPrismaClient as unknown as PrismaClient
-      );
-
       const config = {
         host: 'localhost',
         database: 'testdb',
         username: 'testuser',
       };
 
-      mockedClientModule.initializePrismaClient(config, mockLogger);
+      const result = initializePrismaClient(config, mockLogger);
 
-      expect(mockedClientModule.initializePrismaClient).toHaveBeenCalledWith(config, mockLogger);
+      expect(result).toBeDefined();
+      expect(process.env.DATABASE_URL).toContain(':5432/');
     });
 
     it('should throw error when config is insufficient', () => {
-      mockedClientModule.initializePrismaClient.mockImplementation(() => {
-        throw new Error(
-          'Database configuration must include either "url" or "host", "database", and "username"'
-        );
-      });
-
-      expect(() => mockedClientModule.initializePrismaClient({}, mockLogger)).toThrow(
+      expect(() => initializePrismaClient({}, mockLogger)).toThrow(
         'Database configuration must include either "url" or "host", "database", and "username"'
       );
     });
 
     it('should throw error when host provided but database missing', () => {
-      mockedClientModule.initializePrismaClient.mockImplementation(() => {
-        throw new Error('Database configuration error');
-      });
-
       expect(() =>
-        mockedClientModule.initializePrismaClient(
-          { host: 'localhost', username: 'user' },
-          mockLogger
-        )
-      ).toThrow();
+        initializePrismaClient({ host: 'localhost', username: 'user' }, mockLogger)
+      ).toThrow(
+        'Database configuration must include either "url" or "host", "database", and "username"'
+      );
     });
 
-    it('should register event listeners for query, error, and warn', () => {
-      const localMockClient = {
-        $connect: jest.fn(),
-        $disconnect: jest.fn(),
-        $queryRaw: jest.fn(),
-        $on: jest.fn(),
+    it('should register pool event listeners', () => {
+      initializePrismaClient({ url: 'postgresql://localhost/testdb' }, mockLogger);
+
+      expect(mockPoolOn).toHaveBeenCalledWith('connect', expect.any(Function));
+      expect(mockPoolOn).toHaveBeenCalledWith('error', expect.any(Function));
+      expect(mockPoolOn).toHaveBeenCalledWith('remove', expect.any(Function));
+    });
+
+    it('should handle pool connect event', () => {
+      initializePrismaClient({ url: 'postgresql://localhost/testdb' }, mockLogger);
+
+      // Get the connect callback and call it
+      const connectCall = mockPoolOn.mock.calls.find((call) => call[0] === 'connect');
+      const connectCallback = connectCall[1];
+      connectCallback();
+
+      expect(mockLogger.debug).toHaveBeenCalledWith('New PostgreSQL client connected to pool');
+    });
+
+    it('should handle pool error event', () => {
+      initializePrismaClient({ url: 'postgresql://localhost/testdb' }, mockLogger);
+
+      // Get the error callback and call it
+      const errorCall = mockPoolOn.mock.calls.find((call) => call[0] === 'error');
+      const errorCallback = errorCall[1];
+      const testError = new Error('Pool error');
+      errorCallback(testError);
+
+      expect(mockLogger.error).toHaveBeenCalledWith('PostgreSQL pool error', {
+        error: 'Pool error',
+      });
+    });
+
+    it('should handle pool remove event', () => {
+      initializePrismaClient({ url: 'postgresql://localhost/testdb' }, mockLogger);
+
+      // Get the remove callback and call it
+      const removeCall = mockPoolOn.mock.calls.find((call) => call[0] === 'remove');
+      const removeCallback = removeCall[1];
+      removeCallback();
+
+      expect(mockLogger.debug).toHaveBeenCalledWith('PostgreSQL client removed from pool');
+    });
+
+    it('should handle empty password', () => {
+      const config = {
+        host: 'localhost',
+        database: 'testdb',
+        username: 'testuser',
+        password: '',
       };
 
-      mockedClientModule.initializePrismaClient.mockReturnValue(
-        localMockClient as unknown as PrismaClient
-      );
+      const result = initializePrismaClient(config, mockLogger);
 
-      mockedClientModule.initializePrismaClient(
-        { url: 'postgresql://localhost/testdb' },
-        mockLogger
-      );
-
-      expect(mockedClientModule.initializePrismaClient).toHaveBeenCalledWith(
-        { url: 'postgresql://localhost/testdb' },
-        mockLogger
-      );
+      expect(result).toBeDefined();
+      expect(process.env.DATABASE_URL).toBe('postgresql://testuser:@localhost:5432/testdb');
     });
   });
 
   describe('getPrismaClient', () => {
     it('should return initialized client', () => {
-      mockedClientModule.getPrismaClient.mockReturnValue(
-        mockPrismaClient as unknown as PrismaClient
-      );
+      // First initialize the client
+      initializePrismaClient({ url: 'postgresql://localhost/testdb' }, mockLogger);
 
-      const client = mockedClientModule.getPrismaClient();
+      const client = getPrismaClient();
 
       expect(client).toBeDefined();
-    });
-
-    it('should throw error when client not initialized', () => {
-      mockedClientModule.getPrismaClient.mockImplementation(() => {
-        throw new Error('Prisma client not initialized. Call initializePrismaClient first.');
-      });
-
-      expect(() => mockedClientModule.getPrismaClient()).toThrow(
-        'Prisma client not initialized. Call initializePrismaClient first.'
-      );
     });
   });
 
   describe('disconnectPrisma', () => {
-    it('should disconnect and reset client', async () => {
-      mockedClientModule.disconnectPrisma.mockResolvedValue(undefined);
-      mockedClientModule.getPrismaClient.mockImplementation(() => {
-        throw new Error('Client disconnected');
-      });
+    it('should disconnect and reset client and pool', async () => {
+      // First initialize the client
+      initializePrismaClient({ url: 'postgresql://localhost/testdb' }, mockLogger);
 
-      await mockedClientModule.disconnectPrisma();
+      await disconnectPrisma();
 
-      expect(mockedClientModule.disconnectPrisma).toHaveBeenCalled();
-    });
-
-    it('should do nothing when client not initialized', async () => {
-      mockedClientModule.disconnectPrisma.mockResolvedValue(undefined);
-
-      await mockedClientModule.disconnectPrisma();
-
-      expect(mockedClientModule.disconnectPrisma).toHaveBeenCalled();
+      expect(mockDisconnect).toHaveBeenCalled();
+      expect(mockPoolEnd).toHaveBeenCalled();
     });
   });
 
   describe('testDatabaseConnection', () => {
     it('should return true on successful connection', async () => {
-      mockedClientModule.testDatabaseConnection.mockResolvedValue(true);
+      initializePrismaClient({ url: 'postgresql://localhost/testdb' }, mockLogger);
+      mockQueryRaw.mockResolvedValueOnce([{ '?column?': 1 }]);
 
-      const result = await mockedClientModule.testDatabaseConnection(mockLogger);
+      const result = await testDatabaseConnection(mockLogger);
 
       expect(result).toBe(true);
-      expect(mockedClientModule.testDatabaseConnection).toHaveBeenCalledWith(mockLogger);
+      expect(mockLogger.info).toHaveBeenCalledWith('Database connection successful');
     });
 
     it('should return false on connection failure', async () => {
-      mockedClientModule.testDatabaseConnection.mockResolvedValue(false);
+      initializePrismaClient({ url: 'postgresql://localhost/testdb' }, mockLogger);
+      mockQueryRaw.mockRejectedValueOnce(new Error('Connection failed'));
 
-      const result = await mockedClientModule.testDatabaseConnection(mockLogger);
+      const result = await testDatabaseConnection(mockLogger);
 
       expect(result).toBe(false);
-      expect(mockedClientModule.testDatabaseConnection).toHaveBeenCalledWith(mockLogger);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        'Database connection failed',
+        expect.any(Error)
+      );
     });
   });
 
   describe('runMigrations', () => {
     it('should log migration info', async () => {
-      mockedClientModule.runMigrations.mockResolvedValue(undefined);
+      await runMigrations(mockLogger);
 
-      await mockedClientModule.runMigrations(mockLogger);
-
-      expect(mockedClientModule.runMigrations).toHaveBeenCalledWith(mockLogger);
+      expect(mockLogger.info).toHaveBeenCalledWith('Checking for pending migrations...');
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Migrations should be run manually using: npx prisma migrate deploy'
+      );
     });
   });
 });

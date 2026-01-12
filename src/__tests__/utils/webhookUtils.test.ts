@@ -90,8 +90,8 @@ describe('WebhookUtils', () => {
     });
   });
 
-  describe('processWebhook', () => {
-    it('should handle customer.created event', async () => {
+  describe('handleCustomerCreated', () => {
+    it('should update customer ID when both email and customer_id are present', async () => {
       mockUserMapping.findUnique.mockResolvedValue({
         email: 'customer@example.com',
         userUuid: 'uuid-123',
@@ -99,79 +99,48 @@ describe('WebhookUtils', () => {
       });
       mockUserMapping.update.mockResolvedValue({});
 
-      await WebhookUtils.processWebhook({
-        event_type: 'customer.created',
-        data: {
-          email: 'customer@example.com',
-          customer_id: 'cust-123',
-        },
+      await WebhookUtils.handleCustomerCreated({
+        email: 'customer@example.com',
+        customer_id: 'cust-123',
       });
 
       expect(mockUserMapping.findUnique).toHaveBeenCalledWith({
         where: { email: 'customer@example.com' },
       });
-      expect(console.log).toHaveBeenCalledWith('Processing webhook event: customer.created');
-    });
-
-    it('should handle payment.succeeded event', async () => {
-      await WebhookUtils.processWebhook({
-        event_type: 'payment.succeeded',
-        data: {
-          payment_id: 'pay-123',
-          amount: 1000,
-        },
-      });
-
-      expect(console.log).toHaveBeenCalledWith('Processing webhook event: payment.succeeded');
-      expect(console.log).toHaveBeenCalledWith('Payment succeeded:', {
-        payment_id: 'pay-123',
-        amount: 1000,
+      expect(mockUserMapping.update).toHaveBeenCalledWith({
+        where: { email: 'customer@example.com' },
+        data: { dodoCustomerId: 'cust-123' },
       });
     });
 
-    it('should handle subscription.created event', async () => {
-      await WebhookUtils.processWebhook({
-        event_type: 'subscription.created',
-        data: {
-          subscription_id: 'sub-123',
-        },
+    it('should not update customer ID if email is missing', async () => {
+      await WebhookUtils.handleCustomerCreated({
+        customer_id: 'cust-123',
       });
 
-      expect(console.log).toHaveBeenCalledWith('Processing webhook event: subscription.created');
-      expect(console.log).toHaveBeenCalledWith('Subscription created:', {
-        subscription_id: 'sub-123',
-      });
+      expect(mockUserMapping.findUnique).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        'Missing customer_id or email in customer.created event'
+      );
     });
 
-    it('should log unhandled event types', async () => {
-      await WebhookUtils.processWebhook({
-        event_type: 'unknown.event',
-        data: {},
+    it('should not update customer ID if customer_id is missing', async () => {
+      await WebhookUtils.handleCustomerCreated({
+        email: 'customer@example.com',
       });
 
-      expect(console.log).toHaveBeenCalledWith('Processing webhook event: unknown.event');
-      expect(console.log).toHaveBeenCalledWith('Unhandled webhook event: unknown.event');
+      expect(mockUserMapping.findUnique).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        'Missing customer_id or email in customer.created event'
+      );
     });
 
-    it('should handle missing event_type', async () => {
-      await WebhookUtils.processWebhook({
-        event_type: 'unknown.event',
-        data: {},
-      });
-
-      expect(console.log).toHaveBeenCalledWith('Processing webhook event: unknown.event');
-      expect(console.log).toHaveBeenCalledWith('Unhandled webhook event: unknown.event');
-    });
-
-    it('should handle errors during webhook processing', async () => {
+    it('should handle errors gracefully', async () => {
       mockUserMapping.findUnique.mockRejectedValue(new Error('Database connection error'));
 
-      await WebhookUtils.processWebhook({
-        event_type: 'customer.created',
-        data: {
-          email: 'customer@example.com',
-          customer_id: 'cust-123',
-        },
+      await WebhookUtils.handleCustomerCreated({
+        email: 'customer@example.com',
+        customer_id: 'cust-123',
       });
 
       // Should not throw, just log the error
@@ -180,27 +149,54 @@ describe('WebhookUtils', () => {
         expect.any(Error)
       );
     });
+  });
 
-    it('should not update customer ID if email is missing', async () => {
-      await WebhookUtils.processWebhook({
-        event_type: 'customer.created',
-        data: {
-          customer_id: 'cust-123',
-        },
+  describe('findUser', () => {
+    it('should find user by userUuid', async () => {
+      const mockUser = {
+        email: 'test@example.com',
+        userUuid: 'uuid-123',
+        dodoCustomerId: null,
+      };
+      mockUserMapping.findUnique.mockResolvedValue(mockUser);
+
+      const result = await WebhookUtils.findUser('uuid-123');
+
+      expect(result).toEqual(mockUser);
+      expect(mockUserMapping.findUnique).toHaveBeenCalledWith({
+        where: { userUuid: 'uuid-123' },
       });
+    });
 
+    it('should find user by email when userUuid not found', async () => {
+      const mockUser = {
+        email: 'test@example.com',
+        userUuid: 'uuid-123',
+        dodoCustomerId: null,
+      };
+      mockUserMapping.findUnique
+        .mockResolvedValueOnce(null) // First call with userUuid returns null
+        .mockResolvedValueOnce(mockUser); // Second call with email returns user
+
+      const result = await WebhookUtils.findUser('unknown-uuid', 'test@example.com');
+
+      expect(result).toEqual(mockUser);
+      expect(mockUserMapping.findUnique).toHaveBeenCalledTimes(2);
+    });
+
+    it('should return null when neither userUuid nor email provided', async () => {
+      const result = await WebhookUtils.findUser(undefined, undefined);
+
+      expect(result).toBeNull();
       expect(mockUserMapping.findUnique).not.toHaveBeenCalled();
     });
 
-    it('should not update customer ID if customer_id is missing', async () => {
-      await WebhookUtils.processWebhook({
-        event_type: 'customer.created',
-        data: {
-          email: 'customer@example.com',
-        },
-      });
+    it('should return null when user not found by either method', async () => {
+      mockUserMapping.findUnique.mockResolvedValue(null);
 
-      expect(mockUserMapping.findUnique).not.toHaveBeenCalled();
+      const result = await WebhookUtils.findUser('unknown-uuid', 'unknown@example.com');
+
+      expect(result).toBeNull();
     });
   });
 });

@@ -8,10 +8,22 @@ const mockUserMapping = {
   create: jest.fn(),
 };
 
+const mockPayment = {
+  findMany: jest.fn(),
+  count: jest.fn(),
+};
+
+const mockSession = {
+  findMany: jest.fn(),
+  count: jest.fn(),
+};
+
 // Mock getPrismaClient from database/client
 jest.mock('../../database/client', () => ({
   getPrismaClient: jest.fn(() => ({
     userMapping: mockUserMapping,
+    payment: mockPayment,
+    session: mockSession,
   })),
 }));
 
@@ -192,6 +204,221 @@ describe('Main Routes', () => {
       const response = await request(app).get('/api/v1/user/test@example.com');
 
       expect(response.status).toBe(500);
+    });
+  });
+
+  describe('GET /api/v1/user/:email/billing', () => {
+    it('should return billing info with active tier and latest payment', async () => {
+      const mockDate = new Date('2024-01-15T10:00:00Z');
+      mockUserMapping.findUnique.mockResolvedValue({
+        email: 'test@example.com',
+        userUuid: 'uuid-123',
+        activeTier: 'PRO',
+        tierExpiresAt: mockDate,
+        payments: [
+          {
+            id: 'payment-1',
+            dodoPaymentId: 'pay-123',
+            status: 'COMPLETED',
+            paidAt: mockDate,
+            amountCents: 1000,
+            currency: 'USD',
+            tier: 'PRO',
+            createdAt: mockDate,
+          },
+        ],
+      });
+
+      const response = await request(app).get('/api/v1/user/test@example.com/billing');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        activeTier: 'PRO',
+        tierExpiresAt: mockDate.toISOString(),
+        latestPayment: {
+          status: 'COMPLETED',
+          paidAt: mockDate.toISOString(),
+          amountCents: 1000,
+          currency: 'USD',
+          tier: 'PRO',
+          dodoPaymentId: 'pay-123',
+          createdAt: mockDate.toISOString(),
+        },
+      });
+    });
+
+    it('should return billing info with null values when no tier or payments', async () => {
+      mockUserMapping.findUnique.mockResolvedValue({
+        email: 'test@example.com',
+        userUuid: 'uuid-123',
+        activeTier: null,
+        tierExpiresAt: null,
+        payments: [],
+      });
+
+      const response = await request(app).get('/api/v1/user/test@example.com/billing');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        activeTier: null,
+        tierExpiresAt: null,
+        latestPayment: null,
+      });
+    });
+
+    it('should return 404 when user not found', async () => {
+      mockUserMapping.findUnique.mockResolvedValue(null);
+
+      const response = await request(app).get('/api/v1/user/nonexistent@example.com/billing');
+
+      expect(response.status).toBe(404);
+      expect(response.body).toEqual({
+        error: 'User not found',
+      });
+    });
+  });
+
+  describe('GET /api/v1/user/:email/payments', () => {
+    it('should return paginated payment history', async () => {
+      const mockDate = new Date('2024-01-15T10:00:00Z');
+      mockUserMapping.findUnique.mockResolvedValue({
+        userUuid: 'uuid-123',
+        email: 'test@example.com',
+      });
+
+      mockPayment.findMany.mockResolvedValue([
+        {
+          id: 'payment-1',
+          dodoPaymentId: 'pay-123',
+          status: 'COMPLETED',
+          amountCents: 1000,
+          currency: 'USD',
+          tier: 'PRO',
+          paidAt: mockDate,
+          createdAt: mockDate,
+        },
+        {
+          id: 'payment-2',
+          dodoPaymentId: 'pay-456',
+          status: 'COMPLETED',
+          amountCents: 500,
+          currency: 'USD',
+          tier: 'BASIC',
+          paidAt: mockDate,
+          createdAt: mockDate,
+        },
+      ]);
+
+      mockPayment.count.mockResolvedValue(5);
+
+      const response = await request(app).get(
+        '/api/v1/user/test@example.com/payments?limit=2&offset=0'
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        payments: [
+          {
+            id: 'payment-1',
+            dodoPaymentId: 'pay-123',
+            status: 'COMPLETED',
+            amountCents: 1000,
+            currency: 'USD',
+            tier: 'PRO',
+            paidAt: mockDate.toISOString(),
+            createdAt: mockDate.toISOString(),
+          },
+          {
+            id: 'payment-2',
+            dodoPaymentId: 'pay-456',
+            status: 'COMPLETED',
+            amountCents: 500,
+            currency: 'USD',
+            tier: 'BASIC',
+            paidAt: mockDate.toISOString(),
+            createdAt: mockDate.toISOString(),
+          },
+        ],
+        pagination: {
+          total: 5,
+          limit: 2,
+          offset: 0,
+          hasMore: true,
+        },
+      });
+    });
+
+    it('should return 404 when user not found', async () => {
+      mockUserMapping.findUnique.mockResolvedValue(null);
+
+      const response = await request(app).get('/api/v1/user/nonexistent@example.com/payments');
+
+      expect(response.status).toBe(404);
+      expect(response.body).toEqual({
+        error: 'User not found',
+      });
+    });
+  });
+
+  describe('GET /api/v1/user/:email/sessions', () => {
+    it('should return paginated session history', async () => {
+      const mockDate = new Date('2024-01-15T10:00:00Z');
+      mockUserMapping.findUnique.mockResolvedValue({
+        userUuid: 'uuid-123',
+        email: 'test@example.com',
+      });
+
+      mockSession.findMany.mockResolvedValue([
+        {
+          id: 'session-1',
+          sessionId: 'sess-123',
+          status: 'COMPLETED',
+          mode: 'SUBSCRIPTION',
+          requestedTier: 'PRO',
+          paymentId: 'pay-123',
+          subscriptionId: 'sub-123',
+          createdDate: mockDate,
+          completedAt: mockDate,
+        },
+      ]);
+
+      mockSession.count.mockResolvedValue(1);
+
+      const response = await request(app).get('/api/v1/user/test@example.com/sessions');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        sessions: [
+          {
+            id: 'session-1',
+            sessionId: 'sess-123',
+            status: 'COMPLETED',
+            mode: 'SUBSCRIPTION',
+            requestedTier: 'PRO',
+            paymentId: 'pay-123',
+            subscriptionId: 'sub-123',
+            createdDate: mockDate.toISOString(),
+            completedAt: mockDate.toISOString(),
+          },
+        ],
+        pagination: {
+          total: 1,
+          limit: 10,
+          offset: 0,
+          hasMore: false,
+        },
+      });
+    });
+
+    it('should return 404 when user not found', async () => {
+      mockUserMapping.findUnique.mockResolvedValue(null);
+
+      const response = await request(app).get('/api/v1/user/nonexistent@example.com/sessions');
+
+      expect(response.status).toBe(404);
+      expect(response.body).toEqual({
+        error: 'User not found',
+      });
     });
   });
 

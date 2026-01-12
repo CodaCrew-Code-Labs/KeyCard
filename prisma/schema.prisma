@@ -1,5 +1,3 @@
-// This is your Prisma schema file
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,27 +6,91 @@ datasource db {
   provider = "postgresql"
 }
 
+enum SessionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum SessionMode {
+  SUBSCRIPTION
+  ONE_TIME
+}
+
 model UserMapping {
-  userUuid       String   @id @map("user_uuid")
-  email          String   @unique
-  dodoCustomerId String?  @map("dodo_customer_id")
-  createdAt      DateTime @default(now()) @map("created_at")
-  
-  // Relations
+  userUuid       String    @id @default(cuid()) @map("user_uuid")
+  email          String    @unique @db.VarChar(255)
+  dodoCustomerId String?   @map("dodo_customer_id")
+
+  activeTier     String?   @map("active_tier") @db.VarChar(50)
+  tierExpiresAt  DateTime? @map("tier_expires_at")
+
+  createdAt      DateTime  @default(now()) @map("created_at")
+
   sessions       Session[]
+  payments       Payment[]
 
   @@map("user_mapping")
 }
 
 model Session {
-  id            String   @id @default(cuid())
-  sessionId     String   @map("session_id")
-  sobCustomerId String   @map("sob_customer_id")
-  status        String
-  createdAt     DateTime @default(now()) @map("created_date")
-  
-  // Relations
-  user          UserMapping @relation(fields: [sobCustomerId], references: [userUuid])
+  id             String        @id @default(cuid())
+  sessionId      String        @unique @map("session_id")
 
+  userUuid       String        @map("user_uuid")
+  status         SessionStatus
+  mode           SessionMode?
+  requestedTier  String?       @map("requested_tier") @db.VarChar(50)
+
+  paymentId      String?       @map("payment_id")
+  subscriptionId String?       @map("subscription_id")
+
+  createdDate    DateTime      @default(now()) @map("created_date")
+  completedAt    DateTime?     @map("completed_at")
+  expiresAt      DateTime?     @map("expires_at")
+
+  user           UserMapping   @relation(fields: [userUuid], references: [userUuid], onDelete: Cascade)
+
+  payments       Payment[]
+
+  @@index([userUuid, createdDate])
   @@map("sessions")
+}
+
+model Payment {
+  id                 String        @id @default(cuid())
+
+  userUuid           String        @map("user_uuid")
+  sessionId          String?       @map("session_id")
+
+  dodoPaymentId      String        @unique @map("dodo_payment_id")
+  status             PaymentStatus
+
+  amountCents        Int?          @map("amount_cents") @db.Integer
+  currency           String?       @db.Char(3)
+  tier               String?       @db.VarChar(50)
+
+  dodoSubscriptionId String?       @map("dodo_subscription_id")
+
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+  paidAt             DateTime?     @map("paid_at")
+
+  rawJson            Json?         @map("raw_json")
+
+  user               UserMapping   @relation(fields: [userUuid], references: [userUuid], onDelete: Cascade)
+
+  session            Session?      @relation(fields: [sessionId], references: [sessionId], onDelete: SetNull)
+
+  @@index([userUuid, createdAt])
+  @@index([sessionId])
+  @@map("payments")
 }

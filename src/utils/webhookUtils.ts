@@ -1,5 +1,4 @@
 import { getPrismaClient } from '../database/client';
-import { WebhookData, CustomerData, PaymentData, SubscriptionData } from '../types';
 
 export class WebhookUtils {
   /**
@@ -38,56 +37,36 @@ export class WebhookUtils {
   }
 
   /**
-   * Process webhook based on event type
+   * Handle customer created event - extracts customer info and updates user mapping
    */
-  static async processWebhook(webhookData: WebhookData): Promise<void> {
-    try {
-      const { event_type, data } = webhookData;
+  static async handleCustomerCreated(data: Record<string, unknown>): Promise<void> {
+    const customerId = data.customer_id as string | undefined;
+    const email = data.email as string | undefined;
 
-      console.log(`Processing webhook event: ${event_type}`);
-
-      switch (event_type) {
-        case 'customer.created':
-          await this.handleCustomerCreated(data as CustomerData);
-          break;
-        case 'payment.succeeded':
-          await this.handlePaymentSucceeded(data as PaymentData);
-          break;
-        case 'subscription.created':
-          await this.handleSubscriptionCreated(data as SubscriptionData);
-          break;
-        default:
-          console.log(`Unhandled webhook event: ${event_type}`);
-      }
-    } catch (error) {
-      console.error('Error processing webhook:', error);
+    if (email && customerId) {
+      await this.updateDodoCustomerId(email, customerId);
+    } else {
+      console.log('Missing customer_id or email in customer.created event');
     }
   }
 
   /**
-   * Handle customer created event
+   * Find user by UUID or email
    */
-  private static async handleCustomerCreated(data: CustomerData): Promise<void> {
-    const { customer_id, email } = data;
-
-    if (email && customer_id) {
-      await this.updateDodoCustomerId(email, customer_id);
+  static async findUser(userUuid?: string, email?: string) {
+    if (userUuid) {
+      const user = await getPrismaClient().userMapping.findUnique({
+        where: { userUuid },
+      });
+      if (user) return user;
     }
-  }
 
-  /**
-   * Handle payment succeeded event
-   */
-  private static async handlePaymentSucceeded(data: PaymentData): Promise<void> {
-    console.log('Payment succeeded:', data);
-    // Add payment success logic here
-  }
+    if (email) {
+      return getPrismaClient().userMapping.findUnique({
+        where: { email },
+      });
+    }
 
-  /**
-   * Handle subscription created event
-   */
-  private static async handleSubscriptionCreated(data: SubscriptionData): Promise<void> {
-    console.log('Subscription created:', data);
-    // Add subscription creation logic here
+    return null;
   }
 }

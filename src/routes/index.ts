@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { createDodoPaymentsRoutes } from './dodoPayments';
 import { getPrismaClient } from '../database/client';
 import { v4 as uuidv4 } from 'uuid';
+import { BillingResponse } from '../types';
 
 export function createRoutes(): Router {
   const router = Router();
@@ -74,6 +75,165 @@ export function createRoutes(): Router {
         email: user.email,
         sob_id: user.userUuid,
         dodo_customer_id: user.dodoCustomerId,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * GET /user/:email/billing
+   * Returns user's active tier and latest payment status.
+   * This is the primary endpoint for checking subscription status.
+   */
+  router.get('/user/:email/billing', async (req, res, next) => {
+    try {
+      const { email } = req.params;
+
+      // Get user with latest payment
+      const user = await getPrismaClient().userMapping.findUnique({
+        where: { email },
+        include: {
+          payments: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+        },
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const latestPayment = user.payments[0];
+
+      const response: BillingResponse = {
+        activeTier: user.activeTier,
+        tierExpiresAt: user.tierExpiresAt ? user.tierExpiresAt.toISOString() : null,
+        latestPayment: latestPayment
+          ? {
+              status: latestPayment.status,
+              paidAt: latestPayment.paidAt ? latestPayment.paidAt.toISOString() : null,
+              amountCents: latestPayment.amountCents,
+              currency: latestPayment.currency,
+              tier: latestPayment.tier,
+              dodoPaymentId: latestPayment.dodoPaymentId,
+              createdAt: latestPayment.createdAt.toISOString(),
+            }
+          : null,
+      };
+
+      res.json(response);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * GET /user/:email/payments
+   * Returns user's payment history.
+   */
+  router.get('/user/:email/payments', async (req, res, next) => {
+    try {
+      const { email } = req.params;
+      const limit = parseInt(req.query.limit as string) || 10;
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      // First get the user
+      const user = await getPrismaClient().userMapping.findUnique({
+        where: { email },
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      // Get payments with pagination
+      const [payments, total] = await Promise.all([
+        getPrismaClient().payment.findMany({
+          where: { userUuid: user.userUuid },
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          skip: offset,
+        }),
+        getPrismaClient().payment.count({
+          where: { userUuid: user.userUuid },
+        }),
+      ]);
+
+      res.json({
+        payments: payments.map((p) => ({
+          id: p.id,
+          dodoPaymentId: p.dodoPaymentId,
+          status: p.status,
+          amountCents: p.amountCents,
+          currency: p.currency,
+          tier: p.tier,
+          paidAt: p.paidAt?.toISOString() || null,
+          createdAt: p.createdAt.toISOString(),
+        })),
+        pagination: {
+          total,
+          limit,
+          offset,
+          hasMore: offset + payments.length < total,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * GET /user/:email/sessions
+   * Returns user's checkout session history.
+   */
+  router.get('/user/:email/sessions', async (req, res, next) => {
+    try {
+      const { email } = req.params;
+      const limit = parseInt(req.query.limit as string) || 10;
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      // First get the user
+      const user = await getPrismaClient().userMapping.findUnique({
+        where: { email },
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      // Get sessions with pagination
+      const [sessions, total] = await Promise.all([
+        getPrismaClient().session.findMany({
+          where: { userUuid: user.userUuid },
+          orderBy: { createdDate: 'desc' },
+          take: limit,
+          skip: offset,
+        }),
+        getPrismaClient().session.count({
+          where: { userUuid: user.userUuid },
+        }),
+      ]);
+
+      res.json({
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          sessionId: s.sessionId,
+          status: s.status,
+          mode: s.mode,
+          requestedTier: s.requestedTier,
+          paymentId: s.paymentId,
+          subscriptionId: s.subscriptionId,
+          createdDate: s.createdDate.toISOString(),
+          completedAt: s.completedAt?.toISOString() || null,
+        })),
+        pagination: {
+          total,
+          limit,
+          offset,
+          hasMore: offset + sessions.length < total,
+        },
       });
     } catch (error) {
       next(error);
