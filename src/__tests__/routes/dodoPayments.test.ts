@@ -69,6 +69,10 @@ jest.mock('../../config/tierMapping', () => ({
     return null;
   }),
   calculateTierExpiration: jest.fn(() => new Date('2025-02-15T00:00:00Z')),
+  getActiveLengthFromProductId: jest.fn((productId: string) => {
+    if (productId === 'prod_pro_monthly' || productId === 'prod_basic_monthly') return 'MONTHLY';
+    return null;
+  }),
 }));
 
 // Import after mocks
@@ -941,7 +945,14 @@ describe('DodoPayments Routes', () => {
       mockPayment.upsert.mockResolvedValue({});
       mockPayment.update.mockResolvedValue({});
       mockUserMapping.update.mockResolvedValue({});
-      mockSession.updateMany.mockResolvedValue({ count: 1 });
+      // Mock findFirst to return a session when looking by sessionId
+      mockSession.findFirst.mockResolvedValue({
+        id: 'db-1',
+        sessionId: 'session-123',
+        userUuid: 'user-uuid-123',
+        status: 'PENDING',
+      });
+      mockSession.update.mockResolvedValue({});
 
       const webhookPayload = {
         event_type: 'payment.succeeded',
@@ -959,8 +970,8 @@ describe('DodoPayments Routes', () => {
       const response = await request(app).post('/api/v1/dodopayments/webhook').send(webhookPayload);
 
       expect(response.status).toBe(200);
-      expect(mockSession.updateMany).toHaveBeenCalledWith({
-        where: { sessionId: 'session-123' },
+      expect(mockSession.update).toHaveBeenCalledWith({
+        where: { id: 'db-1' },
         data: expect.objectContaining({
           status: 'COMPLETED',
           paymentId: 'pay-123',

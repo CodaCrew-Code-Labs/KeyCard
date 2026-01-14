@@ -44,6 +44,17 @@ export interface PaymentConfig {
   };
 }
 
+export interface SessionCleanupConfig {
+  /** Enable session cleanup job (default: true) */
+  enabled?: boolean;
+  /** Session timeout in milliseconds (default: 30 minutes) */
+  sessionTimeoutMs?: number;
+  /** Cleanup interval in milliseconds (default: 5 minutes) */
+  cleanupIntervalMs?: number;
+  /** Enable verbose logging (default: false) */
+  verbose?: boolean;
+}
+
 export interface SubscriptionBackendConfig {
   port: number;
   database: DatabaseConfig;
@@ -53,6 +64,7 @@ export interface SubscriptionBackendConfig {
   cors?: CorsConfig;
   rateLimit?: RateLimitConfig;
   logger?: Logger;
+  sessionCleanup?: SessionCleanupConfig;
 }
 
 // Auth types
@@ -178,6 +190,33 @@ export interface SubscriptionData {
   tax_inclusive?: boolean;
   addons?: unknown[];
   meters?: unknown[];
+}
+
+export interface DisputeData {
+  dispute_id: string;
+  payment_id: string;
+  business_id?: string;
+  customer?: WebhookCustomer;
+  amount?: string;
+  currency?: string;
+  dispute_stage?: string;
+  dispute_status?: string;
+  reason?: string;
+  remarks?: string | null;
+  created_at?: string;
+}
+
+export interface RefundData {
+  refund_id: string;
+  payment_id: string;
+  business_id?: string;
+  customer?: WebhookCustomer;
+  amount?: number;
+  currency?: string;
+  reason?: string;
+  status?: string;
+  is_partial?: boolean;
+  created_at?: string;
 }
 
 // Billing response types

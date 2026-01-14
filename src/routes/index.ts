@@ -1,13 +1,18 @@
 import { Router } from 'express';
 import { createDodoPaymentsRoutes } from './dodoPayments';
+import adminRouter from './admin';
 import { getPrismaClient } from '../database/client';
 import { v4 as uuidv4 } from 'uuid';
 import { BillingResponse } from '../types';
+
+// Far future date for FREE tier (effectively never expires)
+const FREE_TIER_EXPIRY = new Date('2099-12-31T23:59:59.999Z');
 
 export function createRoutes(): Router {
   const router = Router();
 
   router.use('/dodopayments', createDodoPaymentsRoutes());
+  router.use('/admin', adminRouter);
 
   router.post('/user', async (req, res, next) => {
     try {
@@ -23,21 +28,44 @@ export function createRoutes(): Router {
       });
 
       let isNewUser = false;
+
       if (!user) {
-        // Create new user with generated UUID
+        // Create new user with generated UUID and FREE tier defaults
         const userUuid = uuidv4();
+
         user = await getPrismaClient().userMapping.create({
           data: {
             userUuid,
             email,
+            activeTier: 'FREE',
+            tierExpiresAt: FREE_TIER_EXPIRY,
+            subscriptionStatus: null, // FREE users don't have a subscription
+            // dodoCustomerId will be set during checkout when DoDo creates the customer
           },
         });
         isNewUser = true;
+        console.log(`✅ Created user ${userUuid} with FREE tier`);
+      } else {
+        // Ensure existing users have FREE tier if they don't have any tier
+        if (!user.activeTier) {
+          user = await getPrismaClient().userMapping.update({
+            where: { email },
+            data: {
+              activeTier: 'FREE',
+              tierExpiresAt: FREE_TIER_EXPIRY,
+            },
+          });
+          console.log(`✅ Updated existing user ${user.userUuid} to FREE tier`);
+        }
       }
 
       res.json({
         uuid: user.userUuid,
         created: isNewUser,
+        dodo_customer_id: user.dodoCustomerId,
+        active_tier: user.activeTier,
+        tier_expires_at: user.tierExpiresAt?.toISOString() || null,
+        subscription_status: user.subscriptionStatus,
         message: isNewUser ? 'User created successfully' : 'User already exists',
       });
     } catch (error) {

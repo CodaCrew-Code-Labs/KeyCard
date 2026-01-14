@@ -15,9 +15,21 @@ enum SessionStatus {
 
 enum PaymentStatus {
   PENDING
+  PROCESSING
   COMPLETED
   FAILED
+  CANCELLED
   REFUNDED
+  DISPUTED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  ON_HOLD
+  FAILED
+  CANCELLED
+  EXPIRED
+  GRACE
 }
 
 enum SessionMode {
@@ -26,17 +38,19 @@ enum SessionMode {
 }
 
 model UserMapping {
-  userUuid       String    @id @default(cuid()) @map("user_uuid")
-  email          String    @unique @db.VarChar(255)
-  dodoCustomerId String?   @map("dodo_customer_id")
+  userUuid           String              @id @default(cuid()) @map("user_uuid")
+  email              String              @unique @db.VarChar(255)
+  dodoCustomerId     String?             @map("dodo_customer_id")
 
-  activeTier     String?   @map("active_tier") @db.VarChar(50)
-  tierExpiresAt  DateTime? @map("tier_expires_at")
+  activeTier         String?             @map("active_tier") @db.VarChar(50)
+  activeLength       String?             @map("active_length") @db.VarChar(50)
+  tierExpiresAt      DateTime?           @map("tier_expires_at")
+  subscriptionStatus SubscriptionStatus? @map("subscription_status")
 
-  createdAt      DateTime  @default(now()) @map("created_at")
+  createdAt          DateTime            @default(now()) @map("created_at")
 
-  sessions       Session[]
-  payments       Payment[]
+  sessions           Session[]
+  payments           Payment[]
 
   @@map("user_mapping")
 }

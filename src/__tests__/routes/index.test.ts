@@ -6,6 +6,7 @@ const mockUserMapping = {
   findUnique: jest.fn(),
   findMany: jest.fn(),
   create: jest.fn(),
+  update: jest.fn(),
 };
 
 const mockPayment = {
@@ -63,6 +64,9 @@ describe('Main Routes', () => {
         userUuid: 'test-uuid-1234',
         email: 'test@example.com',
         dodoCustomerId: null,
+        activeTier: 'FREE',
+        tierExpiresAt: null,
+        subscriptionStatus: null,
         createdAt: new Date(),
       });
 
@@ -72,24 +76,33 @@ describe('Main Routes', () => {
       expect(response.body).toEqual({
         uuid: 'test-uuid-1234',
         created: true,
+        dodo_customer_id: null,
+        active_tier: 'FREE',
+        tier_expires_at: null,
+        subscription_status: null,
         message: 'User created successfully',
       });
       expect(mockUserMapping.findUnique).toHaveBeenCalledWith({
         where: { email: 'test@example.com' },
       });
       expect(mockUserMapping.create).toHaveBeenCalledWith({
-        data: {
+        data: expect.objectContaining({
           userUuid: 'test-uuid-1234',
           email: 'test@example.com',
-        },
+          activeTier: 'FREE',
+        }),
       });
     });
 
     it('should return existing user when user already exists', async () => {
+      const tierExpiresAt = new Date('2025-02-15T00:00:00Z');
       mockUserMapping.findUnique.mockResolvedValue({
         userUuid: 'existing-uuid',
         email: 'test@example.com',
         dodoCustomerId: 'dodo-123',
+        activeTier: 'PRO',
+        tierExpiresAt,
+        subscriptionStatus: 'ACTIVE',
         createdAt: new Date(),
       });
 
@@ -99,6 +112,10 @@ describe('Main Routes', () => {
       expect(response.body).toEqual({
         uuid: 'existing-uuid',
         created: false,
+        dodo_customer_id: 'dodo-123',
+        active_tier: 'PRO',
+        tier_expires_at: tierExpiresAt.toISOString(),
+        subscription_status: 'ACTIVE',
         message: 'User already exists',
       });
       expect(mockUserMapping.create).not.toHaveBeenCalled();

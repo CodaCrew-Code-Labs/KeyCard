@@ -84,6 +84,34 @@ function buildProductToTierMap(): Record<string, TierConfig> {
 const productToTierMap: Record<string, TierConfig> = buildProductToTierMap();
 
 /**
+ * Get active length (Monthly/Yearly) from a DoDo product ID
+ */
+export function getActiveLengthFromProductId(productId: string): 'MONTHLY' | 'YEARLY' | null {
+  const envMapping =
+    process.env.NODE_ENV === 'production'
+      ? process.env.VITE_PROD_TIER_MAPPING
+      : process.env.VITE_TEST_TIER_MAPPING;
+
+  if (envMapping) {
+    try {
+      const parsed = JSON.parse(envMapping) as Record<string, string>;
+
+      for (const [tierKey, mappedProductId] of Object.entries(parsed)) {
+        if (mappedProductId === productId && tierKey !== 'default') {
+          const [, interval] = tierKey.split('/');
+          if (interval?.toLowerCase() === 'yearly') return 'YEARLY';
+          if (interval?.toLowerCase() === 'monthly') return 'MONTHLY';
+        }
+      }
+    } catch (error) {
+      console.error('❌ Failed to parse tier mapping for active length:', error);
+    }
+  }
+
+  return null;
+}
+
+/**
  * Get tier configuration from a DoDo product ID
  */
 export function getTierFromProductId(productId: string): TierConfig | null {

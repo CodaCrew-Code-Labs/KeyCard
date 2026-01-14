@@ -13,6 +13,7 @@ import { tenantContextMiddleware } from './middleware/tenantContext';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { createRateLimiter } from './middleware/rateLimiter';
 import { createRoutes } from './routes';
+import { startSessionCleanupJob, stopSessionCleanupJob } from './services/sessionCleanupService';
 
 export async function createSubscriptionBackend(
   config: SubscriptionBackendConfig
@@ -81,6 +82,17 @@ export async function createSubscriptionBackend(
     logger.info('Webhooks enabled');
   }
 
+  // Start session cleanup job (enabled by default)
+  const cleanupEnabled = config.sessionCleanup?.enabled !== false;
+  if (cleanupEnabled) {
+    startSessionCleanupJob({
+      sessionTimeoutMs: config.sessionCleanup?.sessionTimeoutMs,
+      cleanupIntervalMs: config.sessionCleanup?.cleanupIntervalMs,
+      verbose: config.sessionCleanup?.verbose,
+    });
+    logger.info('Session cleanup job started');
+  }
+
   // Create backend instance
   let server: Server | null = null;
 
@@ -106,6 +118,9 @@ export async function createSubscriptionBackend(
         logger.warn('Server is not running');
         return;
       }
+
+      // Stop cleanup job
+      stopSessionCleanupJob();
 
       // Close server
       await new Promise<void>((resolve, reject) => {
