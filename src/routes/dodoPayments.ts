@@ -131,7 +131,7 @@ export function createDodoPaymentsRoutes(): Router {
               where: { id: existingSession.id },
               data: { status: SessionStatus.COMPLETED, completedAt: new Date() },
             });
-          } catch (checkoutError) {
+          } catch (_checkoutError) {
             // If we can't retrieve the checkout, it may have expired or been deleted
             // Mark the session as expired and continue to create a new one
             console.log(

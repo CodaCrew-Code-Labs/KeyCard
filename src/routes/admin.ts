@@ -33,7 +33,7 @@ router.get('/cron-status', async (req: Request, res: Response) => {
         usersExpired: expiredUsers,
       },
     });
-  } catch (error) {
+  } catch (_error) {
     res.status(500).json({
       success: false,
       error: 'Failed to get cron status',
