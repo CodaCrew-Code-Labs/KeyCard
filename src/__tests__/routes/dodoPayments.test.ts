@@ -435,6 +435,7 @@ describe('DodoPayments Routes', () => {
         userUuid: 'user-uuid-123',
         email: 'test@example.com',
         dodoCustomerId: null,
+        planChangeStatus: null,
       });
 
       mockPayment.upsert.mockResolvedValue({});
@@ -476,11 +477,11 @@ describe('DodoPayments Routes', () => {
         })
       );
 
-      // Verify user tier was updated
+      // Verify user was updated with dodoCustomerId (tier updates are handled by subscription webhooks)
       expect(mockUserMapping.update).toHaveBeenCalledWith({
         where: { userUuid: 'user-uuid-123' },
         data: expect.objectContaining({
-          activeTier: 'PRO',
+          dodoCustomerId: 'cust-123',
         }),
       });
     });
@@ -1143,6 +1144,491 @@ describe('DodoPayments Routes', () => {
 
       expect(response.status).toBe(200);
       expect(mockPayment.upsert).not.toHaveBeenCalled();
+    });
+
+    it('should handle refund.succeeded webhook', async () => {
+      delete process.env.DODO_PAYMENTS_WEBHOOK_KEY;
+
+      mockUserMapping.findUnique.mockResolvedValue({
+        userUuid: 'user-uuid-123',
+        email: 'test@example.com',
+      });
+      // Mock payment.findUnique to return existing payment
+      (mockPayment as Record<string, jest.Mock>).findUnique = jest.fn().mockResolvedValue({
+        id: 'payment-1',
+        dodoPaymentId: 'pay-123',
+        userUuid: 'user-uuid-123',
+      });
+      mockPayment.update.mockResolvedValue({});
+
+      const webhookPayload = {
+        event_type: 'refund.succeeded',
+        data: {
+          refund_id: 'refund-123',
+          payment_id: 'pay-123',
+          amount: 500,
+          currency: 'USD',
+          customer: {
+            email: 'test@example.com',
+          },
+        },
+      };
+
+      const response = await request(app).post('/api/v1/dodopayments/webhook').send(webhookPayload);
+
+      expect(response.status).toBe(200);
+      expect(mockPayment.update).toHaveBeenCalledWith({
+        where: { dodoPaymentId: 'pay-123' },
+        data: expect.objectContaining({
+          status: 'REFUNDED',
+        }),
+      });
+    });
+
+    it('should handle dispute.opened webhook', async () => {
+      delete process.env.DODO_PAYMENTS_WEBHOOK_KEY;
+
+      mockUserMapping.findUnique.mockResolvedValue({
+        userUuid: 'user-uuid-123',
+        email: 'test@example.com',
+      });
+      // Mock payment.findUnique to return existing payment
+      (mockPayment as Record<string, jest.Mock>).findUnique = jest.fn().mockResolvedValue({
+        id: 'payment-1',
+        dodoPaymentId: 'pay-123',
+        userUuid: 'user-uuid-123',
+      });
+      mockPayment.update.mockResolvedValue({});
+
+      const webhookPayload = {
+        event_type: 'dispute.opened',
+        data: {
+          dispute_id: 'dispute-123',
+          payment_id: 'pay-123',
+          amount: '1000',
+          currency: 'USD',
+          reason: 'fraudulent',
+          customer: {
+            email: 'test@example.com',
+          },
+        },
+      };
+
+      const response = await request(app).post('/api/v1/dodopayments/webhook').send(webhookPayload);
+
+      expect(response.status).toBe(200);
+      expect(mockPayment.update).toHaveBeenCalledWith({
+        where: { dodoPaymentId: 'pay-123' },
+        data: expect.objectContaining({
+          status: 'DISPUTED',
+        }),
+      });
+    });
+
+    it('should handle subscription.on_hold webhook', async () => {
+      delete process.env.DODO_PAYMENTS_WEBHOOK_KEY;
+
+      mockUserMapping.findUnique.mockResolvedValue({
+        userUuid: 'user-uuid-123',
+        email: 'test@example.com',
+      });
+      mockUserMapping.update.mockResolvedValue({});
+
+      const webhookPayload = {
+        event_type: 'subscription.on_hold',
+        data: {
+          subscription_id: 'sub-123',
+          metadata: {
+            user_uuid: 'user-uuid-123',
+          },
+        },
+      };
+
+      const response = await request(app).post('/api/v1/dodopayments/webhook').send(webhookPayload);
+
+      expect(response.status).toBe(200);
+      expect(mockUserMapping.update).toHaveBeenCalledWith({
+        where: { userUuid: 'user-uuid-123' },
+        data: expect.objectContaining({
+          subscriptionStatus: 'ON_HOLD',
+        }),
+      });
+    });
+
+    it('should handle subscription.failed webhook', async () => {
+      delete process.env.DODO_PAYMENTS_WEBHOOK_KEY;
+
+      mockUserMapping.findUnique.mockResolvedValue({
+        userUuid: 'user-uuid-123',
+        email: 'test@example.com',
+      });
+      mockUserMapping.update.mockResolvedValue({});
+
+      const webhookPayload = {
+        event_type: 'subscription.failed',
+        data: {
+          subscription_id: 'sub-123',
+          metadata: {
+            user_uuid: 'user-uuid-123',
+          },
+        },
+      };
+
+      const response = await request(app).post('/api/v1/dodopayments/webhook').send(webhookPayload);
+
+      expect(response.status).toBe(200);
+      expect(mockUserMapping.update).toHaveBeenCalledWith({
+        where: { userUuid: 'user-uuid-123' },
+        data: expect.objectContaining({
+          subscriptionStatus: 'FAILED',
+        }),
+      });
+    });
+
+    it('should handle payment.processing webhook', async () => {
+      delete process.env.DODO_PAYMENTS_WEBHOOK_KEY;
+
+      mockUserMapping.findUnique.mockResolvedValue({
+        userUuid: 'user-uuid-123',
+        email: 'test@example.com',
+      });
+      mockPayment.upsert.mockResolvedValue({});
+
+      const webhookPayload = {
+        event_type: 'payment.processing',
+        data: {
+          payment_id: 'pay-123',
+          total_amount: 1000,
+          currency: 'USD',
+          metadata: {
+            user_uuid: 'user-uuid-123',
+          },
+        },
+      };
+
+      const response = await request(app).post('/api/v1/dodopayments/webhook').send(webhookPayload);
+
+      expect(response.status).toBe(200);
+      expect(mockPayment.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { dodoPaymentId: 'pay-123' },
+          create: expect.objectContaining({
+            status: 'PROCESSING',
+          }),
+        })
+      );
+    });
+  });
+
+  describe('POST /api/v1/dodopayments/subscribe with existing session', () => {
+    it('should return fresh existing session without checking DoDo', async () => {
+      const recentDate = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes ago
+
+      mockUserMapping.findUnique.mockResolvedValue({
+        userUuid: 'user-uuid-123',
+        email: 'test@example.com',
+        dodoCustomerId: null,
+      });
+
+      mockSession.findFirst.mockResolvedValue({
+        id: 'db-session-1',
+        sessionId: 'existing-session-123',
+        userUuid: 'user-uuid-123',
+        status: 'PENDING',
+        requestedTier: 'PRO',
+        createdDate: recentDate,
+      });
+
+      const response = await request(app).post('/api/v1/dodopayments/subscribe').send({
+        product_id: 'prod_pro_monthly',
+        customer_email: 'test@example.com',
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        success: true,
+        session_id: 'existing-session-123',
+        existing_session: true,
+      });
+      // Should not create a new session
+      expect(mockSession.create).not.toHaveBeenCalled();
+    });
+
+    it('should verify older session with DoDo and return if still valid', async () => {
+      const oldDate = new Date(Date.now() - 20 * 60 * 1000); // 20 minutes ago
+
+      mockUserMapping.findUnique.mockResolvedValue({
+        userUuid: 'user-uuid-123',
+        email: 'test@example.com',
+        dodoCustomerId: null,
+      });
+
+      mockSession.findFirst.mockResolvedValue({
+        id: 'db-session-1',
+        sessionId: 'existing-session-123',
+        userUuid: 'user-uuid-123',
+        status: 'PENDING',
+        requestedTier: 'PRO',
+        createdDate: oldDate,
+      });
+
+      // DoDo returns session without payment_id (still valid)
+      mockCheckoutSessions.retrieve.mockResolvedValue({
+        session_id: 'existing-session-123',
+        status: 'open',
+        payment_id: null,
+      });
+
+      const response = await request(app).post('/api/v1/dodopayments/subscribe').send({
+        product_id: 'prod_pro_monthly',
+        customer_email: 'test@example.com',
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        success: true,
+        session_id: 'existing-session-123',
+        existing_session: true,
+      });
+    });
+
+    it('should mark completed session and create new one when DoDo session has payment', async () => {
+      const oldDate = new Date(Date.now() - 20 * 60 * 1000);
+
+      mockUserMapping.findUnique.mockResolvedValue({
+        userUuid: 'user-uuid-123',
+        email: 'test@example.com',
+        dodoCustomerId: null,
+      });
+
+      mockSession.findFirst.mockResolvedValue({
+        id: 'db-session-1',
+        sessionId: 'existing-session-123',
+        userUuid: 'user-uuid-123',
+        status: 'PENDING',
+        requestedTier: 'PRO',
+        createdDate: oldDate,
+      });
+
+      // DoDo returns session with payment_id (already used)
+      mockCheckoutSessions.retrieve.mockResolvedValue({
+        session_id: 'existing-session-123',
+        status: 'completed',
+        payment_id: 'pay-123',
+      });
+
+      mockSession.update.mockResolvedValue({});
+
+      // Create new session
+      mockCheckoutSessions.create.mockResolvedValue({
+        session_id: 'new-session-456',
+        checkout_url: 'https://checkout.example.com/new-session-456',
+      });
+
+      mockSession.create.mockResolvedValue({
+        id: 'db-session-2',
+        sessionId: 'new-session-456',
+        userUuid: 'user-uuid-123',
+        status: 'PENDING',
+      });
+
+      const response = await request(app).post('/api/v1/dodopayments/subscribe').send({
+        product_id: 'prod_pro_monthly',
+        customer_email: 'test@example.com',
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        success: true,
+        session_id: 'new-session-456',
+      });
+      // Should have updated old session as completed
+      expect(mockSession.update).toHaveBeenCalledWith({
+        where: { id: 'db-session-1' },
+        data: expect.objectContaining({
+          status: 'COMPLETED',
+        }),
+      });
+    });
+
+    it('should mark session expired when DoDo retrieval fails and create new one', async () => {
+      const oldDate = new Date(Date.now() - 20 * 60 * 1000);
+
+      mockUserMapping.findUnique.mockResolvedValue({
+        userUuid: 'user-uuid-123',
+        email: 'test@example.com',
+        dodoCustomerId: null,
+      });
+
+      mockSession.findFirst.mockResolvedValue({
+        id: 'db-session-1',
+        sessionId: 'existing-session-123',
+        userUuid: 'user-uuid-123',
+        status: 'PENDING',
+        requestedTier: 'PRO',
+        createdDate: oldDate,
+      });
+
+      // DoDo retrieval fails
+      mockCheckoutSessions.retrieve.mockRejectedValue(new Error('Session not found'));
+
+      mockSession.update.mockResolvedValue({});
+
+      // Create new session
+      mockCheckoutSessions.create.mockResolvedValue({
+        session_id: 'new-session-456',
+        checkout_url: 'https://checkout.example.com/new-session-456',
+      });
+
+      mockSession.create.mockResolvedValue({
+        id: 'db-session-2',
+        sessionId: 'new-session-456',
+        userUuid: 'user-uuid-123',
+        status: 'PENDING',
+      });
+
+      const response = await request(app).post('/api/v1/dodopayments/subscribe').send({
+        product_id: 'prod_pro_monthly',
+        customer_email: 'test@example.com',
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        success: true,
+        session_id: 'new-session-456',
+      });
+      // Should have updated old session as expired
+      expect(mockSession.update).toHaveBeenCalledWith({
+        where: { id: 'db-session-1' },
+        data: expect.objectContaining({
+          status: 'EXPIRED',
+        }),
+      });
+    });
+  });
+
+  describe('GET /api/v1/dodopayments/checkout/:id edge cases', () => {
+    it('should handle checkout with pending status', async () => {
+      mockCheckoutSessions.retrieve.mockResolvedValue({
+        session_id: 'session-123',
+        status: 'pending',
+        payment_id: null,
+      });
+
+      mockSession.updateMany.mockResolvedValue({ count: 1 });
+
+      const response = await request(app).get('/api/v1/dodopayments/checkout/session-123');
+
+      expect(response.status).toBe(200);
+      expect(mockSession.updateMany).toHaveBeenCalledWith({
+        where: { sessionId: 'session-123' },
+        data: expect.objectContaining({
+          status: 'PENDING',
+        }),
+      });
+    });
+
+    it('should handle checkout with expired status', async () => {
+      mockCheckoutSessions.retrieve.mockResolvedValue({
+        session_id: 'session-123',
+        status: 'expired',
+      });
+
+      mockSession.updateMany.mockResolvedValue({ count: 1 });
+
+      const response = await request(app).get('/api/v1/dodopayments/checkout/session-123');
+
+      expect(response.status).toBe(200);
+      expect(mockSession.updateMany).toHaveBeenCalledWith({
+        where: { sessionId: 'session-123' },
+        data: expect.objectContaining({
+          status: 'EXPIRED',
+        }),
+      });
+    });
+  });
+
+  describe('GET /api/v1/dodopayments/session/:sessionId edge cases', () => {
+    it('should return session without payments', async () => {
+      const mockDate = new Date('2024-01-15T10:00:00Z');
+      mockSession.findFirst.mockResolvedValue({
+        sessionId: 'session-123',
+        status: 'PENDING',
+        mode: 'SUBSCRIPTION',
+        requestedTier: 'PRO',
+        paymentId: null,
+        subscriptionId: null,
+        createdDate: mockDate,
+        completedAt: null,
+        user: {
+          email: 'test@example.com',
+          userUuid: 'user-uuid-123',
+          activeTier: null,
+          tierExpiresAt: null,
+        },
+        payments: [],
+      });
+
+      const response = await request(app).get('/api/v1/dodopayments/session/session-123');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        session_id: 'session-123',
+        status: 'PENDING',
+        latest_payment: null,
+      });
+    });
+  });
+
+  describe('POST /api/v1/dodopayments/sync-session/:sessionId edge cases', () => {
+    it('should handle sync when checkout not found in DoDo', async () => {
+      mockSession.findUnique.mockResolvedValue({
+        sessionId: 'session-123',
+        userUuid: 'user-uuid-123',
+        requestedTier: 'PRO',
+        user: {
+          email: 'test@example.com',
+          userUuid: 'user-uuid-123',
+        },
+      });
+
+      mockCheckoutSessions.retrieve.mockRejectedValue(new Error('Checkout not found'));
+
+      const response = await request(app).post('/api/v1/dodopayments/sync-session/session-123');
+
+      expect(response.status).toBe(500);
+    });
+
+    it('should handle sync when checkout status is pending', async () => {
+      mockSession.findUnique.mockResolvedValue({
+        sessionId: 'session-123',
+        userUuid: 'user-uuid-123',
+        requestedTier: 'PRO',
+        completedAt: null,
+        user: {
+          email: 'test@example.com',
+          userUuid: 'user-uuid-123',
+        },
+      });
+
+      mockCheckoutSessions.retrieve.mockResolvedValue({
+        session_id: 'session-123',
+        status: 'pending',
+        payment_id: null,
+      });
+
+      mockSession.update.mockResolvedValue({});
+
+      const response = await request(app).post('/api/v1/dodopayments/sync-session/session-123');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        success: true,
+        session_id: 'session-123',
+        session_updated: true,
+        payment_upserted: false,
+        user_tier_updated: false,
+      });
     });
   });
 });

@@ -149,6 +149,7 @@ export interface PaymentData {
   payment_method_type?: string;
   product_cart?: WebhookProduct[];
   subscription_id?: string;
+  payment_link?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -219,10 +220,21 @@ export interface RefundData {
   created_at?: string;
 }
 
+// Pending change info for scheduled tier changes
+export interface PendingChangeInfo {
+  tier: string;
+  activeLength: string | null;
+  effectiveDate: string | null;
+  changeType: string | null;
+}
+
 // Billing response types
 export interface BillingResponse {
   activeTier: string | null;
+  activeLength: string | null;
   tierExpiresAt: string | null;
+  subscriptionStatus: string | null;
+  pendingChange: PendingChangeInfo | null;
   latestPayment: {
     status: string;
     paidAt: string | null;

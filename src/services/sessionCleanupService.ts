@@ -51,6 +51,55 @@ export async function cleanupStaleSessions(
 }
 
 /**
+ * Processes pending tier changes that have reached their effective date
+ * This is a backup mechanism - primary application happens in handleSubscriptionRenewed
+ * This catches any pending changes that might have been missed (e.g., webhook failures)
+ */
+export async function processPendingTierChanges(verbose: boolean = false): Promise<number> {
+  const now = new Date();
+
+  // Find users with pending changes that should have taken effect
+  const usersWithPendingChanges = await getPrismaClient().userMapping.findMany({
+    where: {
+      pendingTier: { not: null },
+      pendingTierEffectiveDate: { lte: now },
+    },
+  });
+
+  let appliedCount = 0;
+
+  for (const user of usersWithPendingChanges) {
+    try {
+      await getPrismaClient().userMapping.update({
+        where: { userUuid: user.userUuid },
+        data: {
+          activeTier: user.pendingTier,
+          activeLength: user.pendingActiveLength,
+          // Clear pending fields after applying
+          pendingTier: null,
+          pendingActiveLength: null,
+          pendingTierEffectiveDate: null,
+          pendingChangeType: null,
+        },
+      });
+
+      appliedCount++;
+      console.log(
+        `📅 Applied pending tier change for user ${user.userUuid}: ${user.activeTier} → ${user.pendingTier}`
+      );
+    } catch (error) {
+      console.error(`❌ Failed to apply pending tier change for user ${user.userUuid}:`, error);
+    }
+  }
+
+  if (appliedCount > 0 || verbose) {
+    console.log(`🔄 Pending tier changes: applied ${appliedCount} change(s)`);
+  }
+
+  return appliedCount;
+}
+
+/**
  * Processes expired user subscriptions with grace period logic
  * - If tier_expires_at is in the past but within 7 days → update status to GRACE
  * - If tier_expires_at is more than 7 days in the past → update status to EXPIRED
@@ -134,6 +183,9 @@ export function startSessionCleanupJob(config: SessionCleanupConfig = {}): void 
   processExpiredUserSubscriptions(verbose).catch((err) => {
     console.error('❌ User subscription cleanup error:', err);
   });
+  processPendingTierChanges(verbose).catch((err) => {
+    console.error('❌ Pending tier changes error:', err);
+  });
 
   // Then run periodically
   cleanupIntervalId = setInterval(() => {
@@ -142,6 +194,9 @@ export function startSessionCleanupJob(config: SessionCleanupConfig = {}): void 
     });
     processExpiredUserSubscriptions(verbose).catch((err) => {
       console.error('❌ User subscription cleanup error:', err);
+    });
+    processPendingTierChanges(verbose).catch((err) => {
+      console.error('❌ Pending tier changes error:', err);
     });
   }, cleanupIntervalMs);
 }

@@ -231,7 +231,13 @@ describe('Main Routes', () => {
         email: 'test@example.com',
         userUuid: 'uuid-123',
         activeTier: 'PRO',
+        activeLength: 'MONTHLY',
         tierExpiresAt: mockDate,
+        subscriptionStatus: 'ACTIVE',
+        pendingTier: null,
+        pendingActiveLength: null,
+        pendingTierEffectiveDate: null,
+        pendingChangeType: null,
         payments: [
           {
             id: 'payment-1',
@@ -251,7 +257,10 @@ describe('Main Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body).toEqual({
         activeTier: 'PRO',
+        activeLength: 'MONTHLY',
         tierExpiresAt: mockDate.toISOString(),
+        subscriptionStatus: 'ACTIVE',
+        pendingChange: null,
         latestPayment: {
           status: 'COMPLETED',
           paidAt: mockDate.toISOString(),
@@ -269,7 +278,13 @@ describe('Main Routes', () => {
         email: 'test@example.com',
         userUuid: 'uuid-123',
         activeTier: null,
+        activeLength: null,
         tierExpiresAt: null,
+        subscriptionStatus: null,
+        pendingTier: null,
+        pendingActiveLength: null,
+        pendingTierEffectiveDate: null,
+        pendingChangeType: null,
         payments: [],
       });
 
@@ -278,7 +293,10 @@ describe('Main Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body).toEqual({
         activeTier: null,
+        activeLength: null,
         tierExpiresAt: null,
+        subscriptionStatus: null,
+        pendingChange: null,
         latestPayment: null,
       });
     });

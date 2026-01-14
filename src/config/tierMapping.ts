@@ -162,6 +162,43 @@ export function isValidTierCode(tier: string): tier is TierCode {
 }
 
 /**
+ * Get tier configuration by tier code (reverse lookup)
+ * Returns the first matching tier config, or a default config if not found
+ */
+export function getTierConfigByCode(
+  tierCode: string,
+  activeLength?: string | null
+): TierConfig | null {
+  const isYearly = activeLength?.toUpperCase() === 'YEARLY';
+
+  // Find a matching tier config from the product map
+  for (const config of Object.values(productToTierMap)) {
+    if (config.code === tierCode) {
+      // If we have an activeLength, try to match the duration
+      if (activeLength) {
+        const configIsYearly = config.defaultDurationDays > 100;
+        if (configIsYearly === isYearly) {
+          return config;
+        }
+      } else {
+        return config;
+      }
+    }
+  }
+
+  // If no exact match found, return a default config for the tier
+  if (isValidTierCode(tierCode)) {
+    return {
+      code: tierCode as TierCode,
+      name: tierCode,
+      defaultDurationDays: isYearly ? 367 : 32,
+    };
+  }
+
+  return null;
+}
+
+/**
  * Add or update a product to tier mapping at runtime
  * (useful for dynamic configuration)
  */

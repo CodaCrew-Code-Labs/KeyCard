@@ -18,8 +18,20 @@ import {
   calculateTierExpiration,
   getActiveLengthFromProductId,
 } from '../config/tierMapping';
+import {
+  determineChangeType,
+  SubscriptionChangeType,
+  getChangeTypeDescription,
+  normalizeBillingFrequency,
+} from '../utils/tierComparison';
 import crypto from 'crypto';
-import { SessionStatus, PaymentStatus, SessionMode, SubscriptionStatus } from '@prisma/client';
+import {
+  SessionStatus,
+  PaymentStatus,
+  SessionMode,
+  SubscriptionStatus,
+  PlanChangeStatus,
+} from '@prisma/client';
 
 export function createDodoPaymentsRoutes(): Router {
   const router = Router();
@@ -520,15 +532,64 @@ export function createDodoPaymentsRoutes(): Router {
             return res.status(404).json({ error: 'User not found' });
           }
 
-          // Check if user has a failed subscription status or expired
-          if (
-            user.subscriptionStatus !== SubscriptionStatus.FAILED &&
-            user.subscriptionStatus !== SubscriptionStatus.ON_HOLD &&
-            user.subscriptionStatus !== SubscriptionStatus.EXPIRED
-          ) {
+          // If subscription is CANCELLED, user needs to subscribe again (not retry)
+          if (user.subscriptionStatus === SubscriptionStatus.CANCELLED) {
             return res.status(400).json({
-              error: 'User does not have a failed, on-hold, or expired subscription',
+              error:
+                'Your subscription has been cancelled. Please subscribe again to continue using the service.',
               current_status: user.subscriptionStatus,
+              action_required: 'subscribe',
+            });
+          }
+
+          // Block retry if subscription is ON_HOLD - payment is being processed
+          if (user.subscriptionStatus === SubscriptionStatus.ON_HOLD) {
+            return res.status(409).json({
+              error:
+                'Cannot retry - subscription is on hold. Please wait for the current payment to be processed.',
+              current_status: user.subscriptionStatus,
+            });
+          }
+
+          // Check for any PROCESSING payments - block retry if payment is in progress
+          const processingPayment = await getPrismaClient().payment.findFirst({
+            where: {
+              userUuid: user.userUuid,
+              status: PaymentStatus.PROCESSING,
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+
+          if (processingPayment) {
+            return res.status(409).json({
+              error:
+                'Cannot retry - a payment is currently being processed. Please wait for it to complete.',
+              current_status: user.subscriptionStatus,
+              processing_payment: {
+                id: processingPayment.dodoPaymentId,
+                createdAt: processingPayment.createdAt?.toISOString(),
+              },
+            });
+          }
+
+          // Allow retry when subscription is ACTIVE or FAILED
+          // ACTIVE: User may want to retry a failed plan change payment
+          // FAILED: Subscription payment failed
+          const canRetry =
+            user.subscriptionStatus === SubscriptionStatus.ACTIVE ||
+            user.subscriptionStatus === SubscriptionStatus.FAILED ||
+            user.subscriptionStatus === SubscriptionStatus.EXPIRED;
+
+          const hasPendingPlanChange =
+            user.planChangeStatus === PlanChangeStatus.PENDING ||
+            user.planChangeStatus === PlanChangeStatus.PAYMENT_NEEDED;
+
+          if (!canRetry && !hasPendingPlanChange) {
+            return res.status(400).json({
+              error:
+                'User does not have an active or failed subscription, nor a pending plan change requiring payment',
+              current_status: user.subscriptionStatus,
+              plan_change_status: user.planChangeStatus,
             });
           }
 
@@ -620,19 +681,9 @@ export function createDodoPaymentsRoutes(): Router {
             });
           }
 
-          // Find the subscription_id from user's most recent session
-          if (!subscriptionId) {
-            const session = await getPrismaClient().session.findFirst({
-              where: {
-                userUuid: user.userUuid,
-                subscriptionId: { not: null },
-              },
-              orderBy: { createdDate: 'desc' },
-            });
-
-            if (session?.subscriptionId) {
-              subscriptionId = session.subscriptionId;
-            }
+          // Use subscriptionId stored directly on user
+          if (!subscriptionId && user.subscriptionId) {
+            subscriptionId = user.subscriptionId;
           }
         }
 
@@ -656,16 +707,614 @@ export function createDodoPaymentsRoutes(): Router {
         });
 
         console.log(`✅ Generated payment update link for subscription ${subscriptionId}`);
+        console.log('📦 DoDo updatePaymentMethod response:', JSON.stringify(response, null, 2));
 
         res.json({
           success: true,
           subscription_id: subscriptionId,
-          update_url: response.url || response.checkout_url || response.link,
+          update_url:
+            response.payment_link || response.url || response.checkout_url || response.link,
           message:
             'Payment method update link generated. Redirect user to update their payment method.',
         });
       } catch (error) {
         console.error('❌ Error generating payment update link:', error);
+        next(error);
+      }
+    }
+  );
+
+  /**
+   * POST /subscription/cancel
+   * Cancels a subscription by setting it to end at the next billing date.
+   * Uses DoDo Payments Update Subscription API with cancel_at_next_billing_date flag.
+   */
+  router.post(
+    '/subscription/cancel',
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const { subscription_id, customer_email } = req.body;
+
+        if (!subscription_id && !customer_email) {
+          return res.status(400).json({
+            error: 'Either subscription_id or customer_email is required',
+          });
+        }
+
+        let subscriptionId = subscription_id;
+        let user = null;
+
+        // If customer_email provided, find user and their active subscription
+        if (customer_email) {
+          user = await getPrismaClient().userMapping.findUnique({
+            where: { email: customer_email },
+          });
+
+          if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+          }
+
+          // Check if user has an active subscription
+          if (
+            user.subscriptionStatus !== SubscriptionStatus.ACTIVE &&
+            user.subscriptionStatus !== SubscriptionStatus.GRACE
+          ) {
+            return res.status(400).json({
+              error: 'User does not have an active subscription to cancel',
+              current_status: user.subscriptionStatus,
+            });
+          }
+
+          // Use subscriptionId stored directly on user
+          if (!subscriptionId && user.subscriptionId) {
+            subscriptionId = user.subscriptionId;
+          }
+        }
+
+        if (!subscriptionId) {
+          return res.status(400).json({
+            error: 'Could not determine subscription_id. Please provide it explicitly.',
+          });
+        }
+
+        // Call DoDo API to cancel subscription at next billing date
+        const client = DodoPaymentsService.getClient();
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const response = await (client.subscriptions as any).update(subscriptionId, {
+          cancel_at_next_billing_date: true,
+        });
+
+        // Update local user status to CANCELLED
+        if (user) {
+          await getPrismaClient().userMapping.update({
+            where: { userUuid: user.userUuid },
+            data: {
+              subscriptionStatus: SubscriptionStatus.CANCELLED,
+            },
+          });
+        } else if (customer_email) {
+          // If we only had subscription_id, try to find and update the user
+          const session = await getPrismaClient().session.findFirst({
+            where: { subscriptionId: subscriptionId },
+          });
+          if (session) {
+            await getPrismaClient().userMapping.update({
+              where: { userUuid: session.userUuid },
+              data: {
+                subscriptionStatus: SubscriptionStatus.CANCELLED,
+              },
+            });
+          }
+        }
+
+        console.log(
+          `✅ Subscription ${subscriptionId} marked for cancellation at next billing date`
+        );
+
+        res.json({
+          success: true,
+          subscription_id: subscriptionId,
+          message:
+            'Subscription will be cancelled at the next billing date. User will retain access until then.',
+          cancellation_details: response,
+        });
+      } catch (error) {
+        console.error('❌ Error cancelling subscription:', error);
+        next(error);
+      }
+    }
+  );
+
+  /**
+   * GET /subscription/plan-change-status
+   * Get the current plan change status for a user.
+   * Returns the status of any pending, completed, or failed plan changes.
+   */
+  router.get(
+    '/subscription/plan-change-status',
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const customer_email = req.query.customer_email as string;
+
+        if (!customer_email) {
+          return res.status(400).json({ error: 'customer_email query parameter is required' });
+        }
+
+        const user = await getPrismaClient().userMapping.findUnique({
+          where: { email: customer_email },
+        });
+
+        if (!user) {
+          return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Build response based on plan change status
+        const response: {
+          success: boolean;
+          plan_change_status: string | null;
+          current_plan: {
+            tier: string | null;
+            activeLength: string | null;
+            expiresAt: string | null;
+          };
+          pending_change: {
+            tier: string | null;
+            activeLength: string | null;
+            effectiveDate: string | null;
+            changeType: string | null;
+            productId: string | null;
+            initiatedAt: string | null;
+          } | null;
+          message: string;
+        } = {
+          success: true,
+          plan_change_status: user.planChangeStatus || null,
+          current_plan: {
+            tier: user.activeTier,
+            activeLength: user.activeLength,
+            expiresAt: user.tierExpiresAt?.toISOString() || null,
+          },
+          pending_change: null,
+          message: '',
+        };
+
+        // Add pending change info if exists
+        if (user.pendingTier) {
+          response.pending_change = {
+            tier: user.pendingTier,
+            activeLength: user.pendingActiveLength,
+            effectiveDate: user.pendingTierEffectiveDate?.toISOString() || null,
+            changeType: user.pendingChangeType,
+            productId: user.pendingProductId || null,
+            initiatedAt: user.planChangeInitiatedAt?.toISOString() || null,
+          };
+        }
+
+        // Set message based on status
+        switch (user.planChangeStatus) {
+          case 'PENDING':
+            response.message = 'Plan change is pending payment confirmation.';
+            break;
+          case 'COMPLETED':
+            response.message = user.pendingTier
+              ? 'Plan change completed. Scheduled change will take effect at the end of billing cycle.'
+              : 'No pending plan changes.';
+            break;
+          case 'PAYMENT_NEEDED':
+            response.message =
+              'Payment failed or on hold. Please update your payment method to complete the plan change.';
+            break;
+          default:
+            response.message = user.pendingTier
+              ? 'There is a scheduled plan change.'
+              : 'No pending plan changes.';
+        }
+
+        res.json(response);
+      } catch (error) {
+        console.error('❌ Error getting plan change status:', error);
+        next(error);
+      }
+    }
+  );
+
+  /**
+   * POST /subscription/cancel-pending-change
+   * Cancels a scheduled tier change (downgrade or frequency change).
+   * Only applicable if there's a pending change that hasn't taken effect yet.
+   */
+  router.post(
+    '/subscription/cancel-pending-change',
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const { customer_email } = req.body;
+
+        if (!customer_email) {
+          return res.status(400).json({ error: 'customer_email is required' });
+        }
+
+        const user = await getPrismaClient().userMapping.findUnique({
+          where: { email: customer_email },
+        });
+
+        if (!user) {
+          return res.status(404).json({ error: 'User not found' });
+        }
+
+        if (!user.pendingTier && !user.planChangeStatus) {
+          return res.status(400).json({
+            error: 'No pending change to cancel',
+            current_tier: user.activeTier,
+          });
+        }
+
+        const cancelledChange = {
+          tier: user.pendingTier,
+          activeLength: user.pendingActiveLength,
+          effectiveDate: user.pendingTierEffectiveDate?.toISOString(),
+          changeType: user.pendingChangeType,
+          status: user.planChangeStatus,
+        };
+
+        // Clear ALL pending change fields including new ones
+        await getPrismaClient().userMapping.update({
+          where: { email: customer_email },
+          data: {
+            planChangeStatus: null,
+            pendingTier: null,
+            pendingActiveLength: null,
+            pendingTierEffectiveDate: null,
+            pendingChangeType: null,
+            pendingProductId: null,
+            planChangeInitiatedAt: null,
+          },
+        });
+
+        console.log(`✅ Cancelled pending change for user ${user.userUuid}:`, cancelledChange);
+
+        res.json({
+          success: true,
+          message: 'Pending change cancelled successfully',
+          cancelled_change: cancelledChange,
+          current_tier: user.activeTier,
+          current_length: user.activeLength,
+        });
+      } catch (error) {
+        console.error('❌ Error cancelling pending change:', error);
+        next(error);
+      }
+    }
+  );
+
+  /**
+   * POST /subscription/preview-change
+   * Preview what a plan change would look like before committing.
+   * Returns proration details and the type of change (upgrade/downgrade/frequency).
+   */
+  router.post(
+    '/subscription/preview-change',
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const { customer_email, product_id } = req.body;
+
+        if (!customer_email) {
+          return res.status(400).json({ error: 'customer_email is required' });
+        }
+
+        if (!product_id) {
+          return res.status(400).json({ error: 'product_id is required' });
+        }
+
+        const user = await getPrismaClient().userMapping.findUnique({
+          where: { email: customer_email },
+        });
+
+        if (!user) {
+          return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Use subscriptionId directly from user record
+        if (!user.subscriptionId) {
+          return res.status(400).json({
+            error: 'No active subscription found for this user',
+          });
+        }
+
+        // Determine what type of change this would be
+        const newTier = getTierCodeFromProductId(product_id);
+        const newLength = getActiveLengthFromProductId(product_id);
+
+        if (!newTier) {
+          return res.status(400).json({
+            error: 'Invalid product_id - could not determine tier',
+          });
+        }
+
+        const changeType = determineChangeType(
+          user.activeTier,
+          newTier,
+          user.activeLength,
+          newLength
+        );
+
+        // Call DoDo API to preview the change
+        const client = DodoPaymentsService.getClient();
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const previewResponse = await (client.subscriptions as any).previewChangePlan(
+          user.subscriptionId,
+          {
+            product_id: product_id,
+            proration_billing_mode: 'prorated_immediately',
+            quantity: 1,
+          }
+        );
+
+        console.log(`✅ Preview change for user ${user.userUuid}: ${user.activeTier} → ${newTier}`);
+
+        res.json({
+          success: true,
+          current: {
+            tier: user.activeTier,
+            activeLength: user.activeLength,
+            expiresAt: user.tierExpiresAt?.toISOString(),
+          },
+          proposed: {
+            tier: newTier,
+            activeLength: newLength,
+          },
+          change_type: changeType,
+          change_description: getChangeTypeDescription(changeType),
+          is_immediate: changeType === 'IMMEDIATE_UPGRADE',
+          effective_date:
+            changeType === 'IMMEDIATE_UPGRADE'
+              ? new Date().toISOString()
+              : user.tierExpiresAt?.toISOString(),
+          proration_details: previewResponse,
+        });
+      } catch (error) {
+        console.error('❌ Error previewing plan change:', error);
+        next(error);
+      }
+    }
+  );
+
+  /**
+   * POST /subscription/change-plan
+   * Changes the subscription plan (upgrade, downgrade, or frequency change).
+   *
+   * NEW FLOW:
+   * 1. Initiate plan change with DoDo using difference_immediately proration
+   * 2. Store pending plan change in DB with status PENDING
+   * 3. Wait for payment.succeeded webhook to mark as COMPLETED and update user tier
+   * 4. If payment fails/on-hold, mark as PAYMENT_NEEDED for follow-up
+   *
+   * This ensures we NEVER give access before payment is confirmed.
+   */
+  router.post(
+    '/subscription/change-plan',
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const { customer_email, product_id } = req.body;
+
+        if (!customer_email) {
+          return res.status(400).json({ error: 'customer_email is required' });
+        }
+
+        if (!product_id) {
+          return res.status(400).json({ error: 'product_id is required' });
+        }
+
+        // Find user
+        const user = await getPrismaClient().userMapping.findUnique({
+          where: { email: customer_email },
+        });
+
+        if (!user) {
+          return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Use subscriptionId directly from user record
+        if (!user.subscriptionId) {
+          return res.status(400).json({
+            error: 'No active subscription found for this user',
+          });
+        }
+
+        const subscriptionId = user.subscriptionId;
+
+        // Check for pending payments - don't allow new plan changes if there's a pending payment
+        const pendingPayment = await getPrismaClient().payment.findFirst({
+          where: {
+            userUuid: user.userUuid,
+            status: {
+              in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING],
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        if (pendingPayment) {
+          return res.status(409).json({
+            success: false,
+            error: 'pending_payment_exists',
+            message:
+              'Cannot change plan while a payment is pending. Please wait for the current payment to complete.',
+            pending_payment: {
+              id: pendingPayment.dodoPaymentId,
+              status: pendingPayment.status,
+              createdAt: pendingPayment.createdAt?.toISOString(),
+            },
+          });
+        }
+
+        // Also check if there's already a pending plan change
+        if (user.planChangeStatus === PlanChangeStatus.PENDING) {
+          return res.status(409).json({
+            success: false,
+            error: 'pending_plan_change_exists',
+            message: 'A plan change is already in progress. Please wait for it to complete.',
+            pending_change: {
+              tier: user.pendingTier,
+              activeLength: user.pendingActiveLength,
+              changeType: user.pendingChangeType,
+              initiatedAt: user.planChangeInitiatedAt?.toISOString(),
+            },
+          });
+        }
+
+        // Determine what type of change this would be
+        const newTier = getTierCodeFromProductId(product_id);
+        const newLength = getActiveLengthFromProductId(product_id);
+
+        if (!newTier) {
+          return res.status(400).json({
+            error: 'Invalid product_id - could not determine tier',
+          });
+        }
+
+        const changeType = determineChangeType(
+          user.activeTier,
+          newTier,
+          user.activeLength,
+          newLength
+        );
+
+        // If no actual change, return early
+        if (changeType === 'NO_CHANGE') {
+          return res.json({
+            success: true,
+            message: 'No plan change needed - you are already on this plan.',
+            plan_change_status: null,
+            current: {
+              tier: user.activeTier,
+              activeLength: user.activeLength,
+            },
+          });
+        }
+
+        // Call DoDo API to change the plan
+        // ALWAYS use difference_immediately for proration - this charges immediately
+        const client = DodoPaymentsService.getClient();
+
+        console.log(
+          `📋 Initiating plan change for user ${user.userUuid}: ${user.activeTier} → ${newTier}`
+        );
+        console.log(`📋 Using proration_billing_mode: difference_immediately`);
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const changeResponse = await (client.subscriptions as any).changePlan(subscriptionId, {
+          product_id: product_id,
+          proration_billing_mode: 'difference_immediately',
+          quantity: 1,
+        });
+
+        console.log('DoDo changePlan response:', JSON.stringify(changeResponse, null, 2));
+
+        // With difference_immediately, DoDo charges the card on file automatically
+        // We do NOT generate payment links - we wait for payment.succeeded webhook
+        // The card on file will be charged, and if it fails, payment.failed webhook handles it
+
+        // Store the pending plan change in the database
+        // Status is PENDING until payment.succeeded webhook confirms it
+        await getPrismaClient().userMapping.update({
+          where: { userUuid: user.userUuid },
+          data: {
+            planChangeStatus: PlanChangeStatus.PENDING,
+            pendingTier: newTier,
+            pendingActiveLength: newLength,
+            pendingTierEffectiveDate:
+              changeType === 'IMMEDIATE_UPGRADE' ? new Date() : user.tierExpiresAt,
+            pendingChangeType: changeType,
+            pendingProductId: product_id,
+            planChangeInitiatedAt: new Date(),
+          },
+        });
+
+        console.log(`✅ Plan change initiated and stored as PENDING for user ${user.userUuid}`);
+
+        res.json({
+          success: true,
+          message: 'Plan change initiated. Waiting for payment confirmation.',
+          plan_change_status: 'PENDING',
+          subscription_id: subscriptionId,
+          change_type: changeType,
+          change_description: getChangeTypeDescription(changeType),
+          current: {
+            tier: user.activeTier,
+            activeLength: user.activeLength,
+          },
+          new: {
+            tier: newTier,
+            activeLength: newLength,
+          },
+          effective_date:
+            changeType === 'IMMEDIATE_UPGRADE'
+              ? new Date().toISOString()
+              : user.tierExpiresAt?.toISOString(),
+          note:
+            changeType === 'IMMEDIATE_UPGRADE'
+              ? 'Your card on file will be charged automatically. Tier will update upon payment confirmation.'
+              : 'Change will take effect at end of current billing cycle.',
+        });
+      } catch (error) {
+        console.error('❌ Error changing plan:', error);
+
+        // Handle specific DoDo Payments errors
+        if (error instanceof Error && 'status' in error) {
+          const apiError = error as { status: number; error?: { code?: string; message?: string } };
+
+          if (apiError.status === 409 && apiError.error?.code === 'PREVIOUS_PAYMENT_PENDING') {
+            // There's already a pending payment - DoDo will automatically retry charging the card
+            // We do NOT generate new payment links - just inform the user to wait
+            const { customer_email } = req.body;
+
+            const user = await getPrismaClient().userMapping.findUnique({
+              where: { email: customer_email },
+            });
+
+            if (!user) {
+              return res.status(404).json({ error: 'User not found' });
+            }
+
+            // If there's already a pending plan change, return that info
+            if (user.planChangeStatus === PlanChangeStatus.PENDING) {
+              return res.json({
+                success: true,
+                message:
+                  'A plan change is already pending. Your card on file will be charged automatically.',
+                plan_change_status: 'PENDING',
+                pending_change: {
+                  tier: user.pendingTier,
+                  activeLength: user.pendingActiveLength,
+                  changeType: user.pendingChangeType,
+                  initiatedAt: user.planChangeInitiatedAt?.toISOString(),
+                },
+                current: {
+                  tier: user.activeTier,
+                  activeLength: user.activeLength,
+                },
+                note: 'Payment will be processed automatically. Tier will update upon payment confirmation.',
+              });
+            }
+
+            // No pending plan change in our DB but DoDo says payment pending
+            // This means DoDo is still processing - tell user to wait
+            return res.json({
+              success: true,
+              message:
+                'A payment is being processed. Please wait for automatic payment confirmation.',
+              plan_change_status: 'PROCESSING',
+              current: {
+                tier: user.activeTier,
+                activeLength: user.activeLength,
+              },
+              note: 'Your card on file is being charged. You will receive confirmation once payment completes.',
+            });
+          }
+        }
+
         next(error);
       }
     }
@@ -854,7 +1503,14 @@ async function processWebhookPayload(payload: WebhookData): Promise<void> {
 
 /**
  * Handle payment.succeeded webhook event
- * This is the key handler that upserts payment and updates user tier.
+ *
+ * NEW FLOW for plan changes:
+ * 1. If user has planChangeStatus = PENDING, this payment confirms the plan change
+ * 2. Update planChangeStatus to COMPLETED
+ * 3. Apply the pending tier change to activeTier
+ * 4. Clear all pending fields
+ *
+ * This ensures we NEVER give access before payment is confirmed.
  */
 async function handlePaymentSucceeded(data: PaymentData, rawPayload: WebhookData): Promise<void> {
   console.log('Processing payment.succeeded:', data.payment_id);
@@ -901,6 +1557,7 @@ async function handlePaymentSucceeded(data: PaymentData, rawPayload: WebhookData
     currency: data.currency || null,
     tier: tier,
     dodoSubscriptionId: data.subscription_id || null,
+    paymentLink: data.payment_link || null,
     paidAt: new Date(),
     rawJson: rawPayload as object,
   };
@@ -917,10 +1574,6 @@ async function handlePaymentSucceeded(data: PaymentData, rawPayload: WebhookData
   console.log(`✅ Upserted payment ${data.payment_id}`);
 
   // Update session if we can find one
-  // Try multiple strategies to find the session:
-  // 1. Via session_id in metadata
-  // 2. Via subscription_id if this is a subscription payment
-  // 3. Via user's most recent pending session
   let sessionId = data.metadata?.session_id;
   let session = null;
 
@@ -930,7 +1583,6 @@ async function handlePaymentSucceeded(data: PaymentData, rawPayload: WebhookData
     });
   }
 
-  // If no session found via metadata, try subscription_id
   if (!session && data.subscription_id) {
     session = await getPrismaClient().session.findFirst({
       where: { subscriptionId: data.subscription_id },
@@ -940,7 +1592,6 @@ async function handlePaymentSucceeded(data: PaymentData, rawPayload: WebhookData
     }
   }
 
-  // If still no session, find user's most recent pending session
   if (!session) {
     session = await getPrismaClient().session.findFirst({
       where: {
@@ -966,51 +1617,73 @@ async function handlePaymentSucceeded(data: PaymentData, rawPayload: WebhookData
     });
     console.log(`✅ Updated session ${sessionId}`);
 
-    // Also update the payment with session_id
     await getPrismaClient().payment.update({
       where: { dodoPaymentId: data.payment_id },
       data: { sessionId },
     });
   }
 
-  // Update user tier and subscription status (source of truth)
-  if (tier) {
-    const tierConfig = data.product_cart?.[0]?.product_id
-      ? getTierFromProductId(data.product_cart[0].product_id)
-      : null;
+  // Re-fetch user to get latest pending change info
+  const freshUser = await getPrismaClient().userMapping.findUnique({
+    where: { userUuid: user.userUuid },
+  });
 
-    const activeLength = data.product_cart?.[0]?.product_id
-      ? getActiveLengthFromProductId(data.product_cart[0].product_id)
-      : null;
-
-    // Calculate expiration based on tier config (payment webhook doesn't have expires_at)
-    // The subscription.active webhook will update with actual expiration if available
-    const tierExpiresAt = tierConfig ? calculateTierExpiration(tierConfig) : null;
-
-    console.log(
-      `🔍 Payment success - tier: ${tier}, activeLength: ${activeLength}, tierConfig: ${JSON.stringify(tierConfig)}, calculated expiration: ${tierExpiresAt?.toISOString()}`
-    );
+  // ============================================================
+  // PLAN CHANGE FLOW: Only mark status as COMPLETED
+  // The subscription webhooks (subscription.updated, subscription.plan_changed)
+  // will handle updating the actual tier based on the new product_id
+  // ============================================================
+  if (freshUser?.planChangeStatus === PlanChangeStatus.PENDING) {
+    console.log(`🎉 PLAN CHANGE PAYMENT SUCCEEDED for user ${user.userUuid}`);
+    console.log(`   Pending change: ${freshUser.activeTier} → ${freshUser.pendingTier}`);
+    console.log(`   Change type: ${freshUser.pendingChangeType}`);
+    console.log(`   ⏳ Marking as COMPLETED - subscription webhook will update the tier`);
 
     await getPrismaClient().userMapping.update({
       where: { userUuid: user.userUuid },
       data: {
-        activeTier: tier,
-        activeLength: activeLength,
-        tierExpiresAt,
-        dodoCustomerId: data.customer?.customer_id || user.dodoCustomerId,
-        // Set subscription status to ACTIVE on successful payment
-        subscriptionStatus: data.subscription_id ? SubscriptionStatus.ACTIVE : null,
+        // Mark plan change as COMPLETED - subscription webhook will apply the new tier
+        planChangeStatus: PlanChangeStatus.COMPLETED,
+        dodoCustomerId: data.customer?.customer_id || freshUser.dodoCustomerId,
+        // Store subscriptionId if available
+        subscriptionId: data.subscription_id || freshUser.subscriptionId,
       },
     });
 
-    console.log(
-      `✅ Updated user ${user.userUuid} tier to ${tier}, length: ${activeLength}, expires at ${tierExpiresAt?.toISOString()}, subscription status: ACTIVE`
-    );
+    console.log(`✅ Plan change marked as COMPLETED for user ${user.userUuid}`);
+    return;
   }
+
+  // ============================================================
+  // STANDARD FLOW: Update basic fields only
+  // Let subscription webhooks handle tier updates
+  // ============================================================
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updateData: any = {
+    dodoCustomerId: data.customer?.customer_id || user.dodoCustomerId,
+  };
+
+  // Store subscriptionId on user if available
+  if (data.subscription_id) {
+    updateData.subscriptionId = data.subscription_id;
+  }
+
+  await getPrismaClient().userMapping.update({
+    where: { userUuid: user.userUuid },
+    data: updateData,
+  });
+
+  console.log(
+    `✅ Payment succeeded for user ${user.userUuid} - subscription webhooks will handle tier updates`
+  );
 }
 
 /**
  * Handle payment.failed webhook event
+ *
+ * NEW FLOW for plan changes:
+ * If user has planChangeStatus = PENDING, mark it as PAYMENT_NEEDED
+ * This allows us to notify the user to update their payment method
  */
 async function handlePaymentFailed(data: PaymentData, rawPayload: WebhookData): Promise<void> {
   console.log('Processing payment.failed:', data.payment_id);
@@ -1054,6 +1727,31 @@ async function handlePaymentFailed(data: PaymentData, rawPayload: WebhookData): 
 
   console.log(`✅ Recorded failed payment ${data.payment_id}`);
 
+  // ============================================================
+  // NEW PLAN CHANGE FLOW: If there's a pending plan change, mark as PAYMENT_NEEDED
+  // ============================================================
+  // Re-fetch user to get latest data
+  const freshUser = await getPrismaClient().userMapping.findUnique({
+    where: { userUuid: user.userUuid },
+  });
+
+  if (freshUser?.planChangeStatus === PlanChangeStatus.PENDING) {
+    console.log(`⚠️ Plan change payment FAILED for user ${user.userUuid}`);
+    console.log(`   Marking plan change as PAYMENT_NEEDED`);
+    console.log(`   Pending tier: ${freshUser.pendingTier}`);
+
+    await getPrismaClient().userMapping.update({
+      where: { userUuid: user.userUuid },
+      data: {
+        planChangeStatus: PlanChangeStatus.PAYMENT_NEEDED,
+        // Keep pending fields so we know what they were trying to change to
+        // User can retry the payment to complete the plan change
+      },
+    });
+
+    console.log(`✅ Plan change marked as PAYMENT_NEEDED for user ${user.userUuid}`);
+  }
+
   // Update session if found
   const sessionId = data.metadata?.session_id;
   if (sessionId) {
@@ -1096,49 +1794,46 @@ async function handleSubscriptionCreated(
     return;
   }
 
-  // Update user's dodo_customer_id if not set
-  if (data.customer?.customer_id && !user.dodoCustomerId) {
-    await getPrismaClient().userMapping.update({
-      where: { userUuid: user.userUuid },
-      data: { dodoCustomerId: data.customer.customer_id },
-    });
-    console.log(`✅ Updated dodo_customer_id for ${user.email}`);
-  }
-
   // Determine tier
   let tier = data.metadata?.requested_tier || null;
   if (!tier && data.product_id) {
     tier = getTierCodeFromProductId(data.product_id);
   }
 
-  // Update user tier with subscription period
+  // Build update data - always store subscriptionId and customerId
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updateData: any = {
+    subscriptionId: data.subscription_id,
+    dodoCustomerId: data.customer?.customer_id || user.dodoCustomerId,
+  };
+
+  // Update user tier with subscription period if active
   if (tier && data.status === 'active') {
     const tierConfig = data.product_id ? getTierFromProductId(data.product_id) : null;
-    // Use subscription_period_interval from webhook if product lookup doesn't provide activeLength
     const activeLength =
       (data.product_id ? getActiveLengthFromProductId(data.product_id) : null) ||
-      data.payment_frequency_interval ||
+      normalizeBillingFrequency(data.payment_frequency_interval ?? null) ||
       null;
 
-    // Use next_billing_date or current_period_end (current billing period end), NOT expires_at (final subscription end)
-    // tier_expires_at should represent when the current period ends and next payment is due
     const expiresAt = data.next_billing_date || data.current_period_end;
 
-    await getPrismaClient().userMapping.update({
-      where: { userUuid: user.userUuid },
-      data: {
-        activeTier: tier,
-        activeLength: activeLength,
-        tierExpiresAt: expiresAt
-          ? new Date(expiresAt)
-          : tierConfig
-            ? calculateTierExpiration(tierConfig)
-            : null,
-      },
-    });
-
-    console.log(`✅ Updated user ${user.userUuid} tier to ${tier}, length: ${activeLength}`);
+    updateData.activeTier = tier;
+    updateData.activeLength = activeLength;
+    updateData.tierExpiresAt = expiresAt
+      ? new Date(expiresAt)
+      : tierConfig
+        ? calculateTierExpiration(tierConfig)
+        : null;
   }
+
+  await getPrismaClient().userMapping.update({
+    where: { userUuid: user.userUuid },
+    data: updateData,
+  });
+
+  console.log(
+    `✅ Updated user ${user.userUuid} with subscription ${data.subscription_id}, tier: ${tier || '(unchanged)'}`
+  );
 
   // Log the raw subscription data for debugging
   console.log('Subscription data:', JSON.stringify(rawPayload, null, 2));
@@ -1174,39 +1869,35 @@ async function handleSubscriptionActive(
     return;
   }
 
-  // Update dodo_customer_id if available
-  if (data.customer?.customer_id && !user.dodoCustomerId) {
-    await getPrismaClient().userMapping.update({
-      where: { userUuid: user.userUuid },
-      data: { dodoCustomerId: data.customer.customer_id },
-    });
-    console.log(`✅ Updated dodo_customer_id for ${user.email}`);
-  }
-
   // Determine tier
   let tier = data.metadata?.requested_tier || null;
   if (!tier && data.product_id) {
     tier = getTierCodeFromProductId(data.product_id);
   }
 
-  // Use next_billing_date or current_period_end (current billing period end), NOT expires_at (final subscription end)
-  // tier_expires_at should represent when the current period ends and next payment is due
+  // Use next_billing_date or current_period_end (current billing period end)
   const expiresAt = data.next_billing_date || data.current_period_end;
   const tierConfig = data.product_id ? getTierFromProductId(data.product_id) : null;
 
   console.log(
-    `🔍 Subscription expiration data - expires_at: ${data.expires_at}, next_billing_date: ${data.next_billing_date}, current_period_end: ${data.current_period_end}, tierConfig: ${JSON.stringify(tierConfig)}`
+    `🔍 Subscription expiration data - expires_at: ${data.expires_at}, next_billing_date: ${data.next_billing_date}, current_period_end: ${data.current_period_end}`
   );
+
+  // Build update data - always store subscriptionId
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updateData: any = {
+    subscriptionId: data.subscription_id,
+    dodoCustomerId: data.customer?.customer_id || user.dodoCustomerId,
+    subscriptionStatus: SubscriptionStatus.ACTIVE,
+  };
 
   // Update user tier and subscription status with new period
   if (tier) {
-    // Use subscription_period_interval from webhook if product lookup doesn't provide activeLength
     const activeLength =
       (data.product_id ? getActiveLengthFromProductId(data.product_id) : null) ||
-      data.payment_frequency_interval ||
+      normalizeBillingFrequency(data.payment_frequency_interval ?? null) ||
       null;
 
-    // Calculate expiration: prefer DoDo's expiration date, fallback to calculated date based on tier config
     let tierExpiresAt: Date | null = null;
     if (expiresAt) {
       tierExpiresAt = new Date(expiresAt);
@@ -1214,22 +1905,19 @@ async function handleSubscriptionActive(
       tierExpiresAt = calculateTierExpiration(tierConfig);
     }
 
-    await getPrismaClient().userMapping.update({
-      where: { userUuid: user.userUuid },
-      data: {
-        activeTier: tier,
-        activeLength: activeLength,
-        tierExpiresAt,
-        dodoCustomerId: data.customer?.customer_id || user.dodoCustomerId,
-        // Set subscription status to ACTIVE when subscription becomes active
-        subscriptionStatus: SubscriptionStatus.ACTIVE,
-      },
-    });
-
-    console.log(
-      `✅ Activated subscription for user ${user.userUuid}, tier set to ${tier}, length: ${activeLength}, status: ACTIVE, expires at ${tierExpiresAt?.toISOString()}`
-    );
+    updateData.activeTier = tier;
+    updateData.activeLength = activeLength;
+    updateData.tierExpiresAt = tierExpiresAt;
   }
+
+  await getPrismaClient().userMapping.update({
+    where: { userUuid: user.userUuid },
+    data: updateData,
+  });
+
+  console.log(
+    `✅ Activated subscription ${data.subscription_id} for user ${user.userUuid}, tier: ${tier || '(unchanged)'}, status: ACTIVE`
+  );
 
   // Update session table - find session by user and update with subscription_id
   // First try to find a pending session for this user
@@ -1400,36 +2088,80 @@ async function handleSubscriptionUpdated(
     });
   }
 
-  // Determine tier from product_id or metadata
-  let tier = data.metadata?.requested_tier || null;
-  if (!tier && data.product_id) {
-    tier = getTierCodeFromProductId(data.product_id);
-  }
-
   // Use next_billing_date or current_period_end (current billing period end), NOT expires_at (final subscription end)
   // tier_expires_at should represent when the current period ends and next payment is due
   const expiresAt = data.next_billing_date || data.current_period_end;
 
+  // Determine tier from product_id (source of truth) - fallback to metadata only if no product_id
+  // IMPORTANT: product_id reflects the CURRENT plan, metadata.requested_tier may be stale after plan changes
+  const tier = data.product_id
+    ? getTierCodeFromProductId(data.product_id)
+    : data.metadata?.requested_tier || null;
+
   // Only update tier if subscription is active
   if (data.status === 'active' && tier) {
+    // Re-fetch user to get latest state (plan change might have just been completed)
+    const freshUser = await getPrismaClient().userMapping.findUnique({
+      where: { userUuid: user.userUuid },
+    });
+
+    // IMPORTANT: If a plan change is PENDING (payment not confirmed), skip tier update
+    // to avoid overwriting with old product_id before payment completes
+    if (freshUser?.planChangeStatus === PlanChangeStatus.PENDING) {
+      console.log(
+        `⏭️ Skipping tier update in subscription.updated - plan change is PENDING (awaiting payment)`
+      );
+      console.log(`   Current tier: ${freshUser.activeTier}, webhook product tier: ${tier}`);
+
+      // Only update non-tier fields like tierExpiresAt and dodoCustomerId
+      await getPrismaClient().userMapping.update({
+        where: { userUuid: user.userUuid },
+        data: {
+          tierExpiresAt: expiresAt ? new Date(expiresAt) : freshUser.tierExpiresAt,
+          dodoCustomerId: data.customer?.customer_id || freshUser.dodoCustomerId,
+        },
+      });
+      return;
+    }
+
+    // If plan change is COMPLETED, this webhook has the NEW product_id - apply tier and clear pending fields
+    const shouldClearPlanChange = freshUser?.planChangeStatus === PlanChangeStatus.COMPLETED;
+
     // Use subscription_period_interval from webhook if product lookup doesn't provide activeLength
+    // Normalize frequency - DoDo uses "Month"/"Year", we use "MONTHLY"/"YEARLY"
     const activeLength =
       (data.product_id ? getActiveLengthFromProductId(data.product_id) : null) ||
-      data.payment_frequency_interval ||
+      normalizeBillingFrequency(data.payment_frequency_interval ?? null) ||
       null;
+
+    // Build update data
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateData: any = {
+      activeTier: tier,
+      activeLength: activeLength,
+      tierExpiresAt: expiresAt ? new Date(expiresAt) : user.tierExpiresAt,
+      dodoCustomerId: data.customer?.customer_id || user.dodoCustomerId,
+    };
+
+    // If plan change was COMPLETED, clear all the pending fields
+    if (shouldClearPlanChange) {
+      console.log(`🎉 Applying plan change - clearing pending fields after COMPLETED status`);
+      updateData.planChangeStatus = null;
+      updateData.pendingTier = null;
+      updateData.pendingActiveLength = null;
+      updateData.pendingTierEffectiveDate = null;
+      updateData.pendingChangeType = null;
+      updateData.pendingProductId = null;
+      updateData.planChangeInitiatedAt = null;
+    }
 
     await getPrismaClient().userMapping.update({
       where: { userUuid: user.userUuid },
-      data: {
-        activeTier: tier,
-        activeLength: activeLength,
-        tierExpiresAt: expiresAt ? new Date(expiresAt) : user.tierExpiresAt,
-        dodoCustomerId: data.customer?.customer_id || user.dodoCustomerId,
-      },
+      data: updateData,
     });
 
     console.log(
-      `✅ Updated subscription for user ${user.userUuid}, tier: ${tier}, length: ${activeLength}, expires at ${expiresAt}`
+      `✅ Updated subscription for user ${user.userUuid}, tier: ${tier}, length: ${activeLength}, expires at ${expiresAt}${shouldClearPlanChange ? ' (plan change completed)' : ''}`
     );
   } else if (data.status === 'cancelled' || data.status === 'expired') {
     // If subscription was updated to cancelled/expired status
@@ -1476,6 +2208,9 @@ async function handleSubscriptionUpdated(
 /**
  * Handle subscription.renewed webhook event
  * This is fired when a subscription is renewed (recurring payment successful)
+ *
+ * Important: This is where pending tier changes (downgrades/frequency changes) are applied.
+ * When a subscription renews, any pending changes take effect.
  */
 async function handleSubscriptionRenewed(
   data: SubscriptionData,
@@ -1503,26 +2238,75 @@ async function handleSubscriptionRenewed(
     return;
   }
 
-  // Determine tier from product_id or metadata
-  let tier = data.metadata?.requested_tier || null;
-  if (!tier && data.product_id) {
-    tier = getTierCodeFromProductId(data.product_id);
+  // Use next_billing_date or current_period_end (current billing period end)
+  const expiresAt = data.next_billing_date || data.current_period_end;
+
+  // Check for pending tier changes to apply on renewal
+  if (user.pendingTier && user.pendingTierEffectiveDate) {
+    const now = new Date();
+    // Apply pending change if the effective date has passed or is now
+    if (user.pendingTierEffectiveDate <= now) {
+      console.log(
+        `📅 Applying pending tier change on renewal: ${user.activeTier} → ${user.pendingTier}`
+      );
+
+      await getPrismaClient().userMapping.update({
+        where: { userUuid: user.userUuid },
+        data: {
+          activeTier: user.pendingTier,
+          activeLength: user.pendingActiveLength,
+          tierExpiresAt: expiresAt ? new Date(expiresAt) : user.tierExpiresAt,
+          subscriptionStatus: SubscriptionStatus.ACTIVE,
+          dodoCustomerId: data.customer?.customer_id || user.dodoCustomerId,
+          // Clear pending fields after applying
+          pendingTier: null,
+          pendingActiveLength: null,
+          pendingTierEffectiveDate: null,
+          pendingChangeType: null,
+        },
+      });
+
+      console.log(
+        `✅ Applied pending change for user ${user.userUuid}: now on ${user.pendingTier}/${user.pendingActiveLength}, expires: ${expiresAt}`
+      );
+
+      // Update session if exists
+      const existingSession = await getPrismaClient().session.findFirst({
+        where: { subscriptionId: data.subscription_id },
+      });
+
+      if (existingSession) {
+        await getPrismaClient().session.update({
+          where: { id: existingSession.id },
+          data: {
+            requestedTier: user.pendingTier,
+            expiresAt: expiresAt ? new Date(expiresAt) : existingSession.expiresAt,
+          },
+        });
+      }
+
+      return; // Exit early since we've handled the renewal with the pending change
+    }
   }
+
+  // No pending change to apply - normal renewal flow
+  // Determine tier from product_id (source of truth) - fallback to metadata only if no product_id
+  // IMPORTANT: product_id reflects the CURRENT plan, metadata.requested_tier may be stale after plan changes
+  let tier = data.product_id
+    ? getTierCodeFromProductId(data.product_id)
+    : data.metadata?.requested_tier || null;
 
   // Use existing tier if none found
   if (!tier) {
     tier = user.activeTier;
   }
 
-  // Use next_billing_date or current_period_end (current billing period end), NOT expires_at (final subscription end)
-  // tier_expires_at should represent when the current period ends and next payment is due
-  const expiresAt = data.next_billing_date || data.current_period_end;
-
   if (tier) {
     // Use subscription_period_interval from webhook if product lookup doesn't provide activeLength
+    // Normalize frequency - DoDo uses "Month"/"Year", we use "MONTHLY"/"YEARLY"
     const activeLength =
       (data.product_id ? getActiveLengthFromProductId(data.product_id) : null) ||
-      data.payment_frequency_interval ||
+      normalizeBillingFrequency(data.payment_frequency_interval ?? null) ||
       null;
 
     await getPrismaClient().userMapping.update({
@@ -1658,7 +2442,7 @@ async function handlePaymentProcessing(data: PaymentData, rawPayload: WebhookDat
     tier = getTierCodeFromProductId(data.product_cart[0].product_id);
   }
 
-  // Upsert processing payment record
+  // Upsert processing payment record with payment_link
   await getPrismaClient().payment.upsert({
     where: { dodoPaymentId: data.payment_id },
     create: {
@@ -1669,10 +2453,12 @@ async function handlePaymentProcessing(data: PaymentData, rawPayload: WebhookDat
       currency: data.currency || null,
       tier: tier,
       dodoSubscriptionId: data.subscription_id || null,
+      paymentLink: data.payment_link || null,
       rawJson: rawPayload as object,
     },
     update: {
       status: PaymentStatus.PROCESSING,
+      paymentLink: data.payment_link || null,
       rawJson: rawPayload as object,
     },
   });
@@ -1879,6 +2665,8 @@ async function handleSubscriptionFailed(
 /**
  * Handle subscription.on_hold webhook event
  * Fired when a subscription is put on hold (e.g., payment issue pending resolution)
+ *
+ * NEW FLOW: If there's a pending plan change, mark as PAYMENT_NEEDED
  */
 async function handleSubscriptionOnHold(
   data: SubscriptionData,
@@ -1918,14 +2706,29 @@ async function handleSubscriptionOnHold(
     return;
   }
 
-  // Update user's subscription status to ON_HOLD
-  // Keep the tier active during grace period
+  // Build update data
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updateData: any = {
+    subscriptionStatus: SubscriptionStatus.ON_HOLD,
+  };
+
+  // ============================================================
+  // NEW PLAN CHANGE FLOW: If there's a pending plan change, mark as PAYMENT_NEEDED
+  // ============================================================
+  // Re-fetch to get latest data including new fields
+  const freshUser = await getPrismaClient().userMapping.findUnique({
+    where: { userUuid: user.userUuid },
+  });
+
+  if (freshUser?.planChangeStatus === PlanChangeStatus.PENDING) {
+    console.log(`⚠️ Plan change payment ON HOLD for user ${user.userUuid}`);
+    console.log(`   Marking plan change as PAYMENT_NEEDED`);
+    updateData.planChangeStatus = 'PAYMENT_NEEDED';
+  }
+
   await getPrismaClient().userMapping.update({
     where: { userUuid: user.userUuid },
-    data: {
-      subscriptionStatus: SubscriptionStatus.ON_HOLD,
-      // Keep activeTier as is - user retains access during hold period
-    },
+    data: updateData,
   });
 
   console.log(`⚠️ Subscription on hold for user ${user.userUuid}`);
@@ -1939,7 +2742,7 @@ async function handleSubscriptionOnHold(
     await getPrismaClient().session.update({
       where: { id: existingSession.id },
       data: {
-        status: SessionStatus.PENDING, // Mark as pending since subscription is on hold
+        status: SessionStatus.PENDING,
       },
     });
     console.log(`✅ Updated session ${existingSession.sessionId} to PENDING (on hold)`);
@@ -1949,6 +2752,12 @@ async function handleSubscriptionOnHold(
 /**
  * Handle subscription.plan_changed webhook event
  * Fired when a subscription plan is upgraded or downgraded
+ *
+ * NEW FLOW:
+ * - If planChangeStatus is already PENDING (set by change-plan API), this webhook
+ *   just confirms the plan change was registered with DoDo
+ * - We do NOT update the tier here - that happens in payment.succeeded
+ * - For deferred changes (downgrades/frequency), we schedule for end of billing cycle
  */
 async function handleSubscriptionPlanChanged(
   data: SubscriptionData,
@@ -1978,43 +2787,116 @@ async function handleSubscriptionPlanChanged(
 
   // Determine the new tier from the new product_id
   const newTier = data.product_id ? getTierCodeFromProductId(data.product_id) : null;
-  const tierConfig = data.product_id ? getTierFromProductId(data.product_id) : null;
+  const newActiveLength =
+    (data.product_id ? getActiveLengthFromProductId(data.product_id) : null) ||
+    normalizeBillingFrequency(data.payment_frequency_interval ?? null) ||
+    null;
 
-  // Use next_billing_date or current_period_end (current billing period end), NOT expires_at (final subscription end)
-  // tier_expires_at should represent when the current period ends and next payment is due
+  // Use next_billing_date or current_period_end (current billing period end)
   const expiresAt = data.next_billing_date || data.current_period_end;
 
-  if (newTier) {
-    const oldTier = user.activeTier;
-    // Use subscription_period_interval from webhook if product lookup doesn't provide activeLength
-    const activeLength =
-      (data.product_id ? getActiveLengthFromProductId(data.product_id) : null) ||
-      data.payment_frequency_interval ||
-      null;
-
-    await getPrismaClient().userMapping.update({
-      where: { userUuid: user.userUuid },
-      data: {
-        activeTier: newTier,
-        activeLength: activeLength,
-        tierExpiresAt: expiresAt
-          ? new Date(expiresAt)
-          : tierConfig
-            ? calculateTierExpiration(tierConfig)
-            : user.tierExpiresAt,
-        subscriptionStatus:
-          data.status === 'active' ? SubscriptionStatus.ACTIVE : user.subscriptionStatus,
-        dodoCustomerId: data.customer?.customer_id || user.dodoCustomerId,
-      },
-    });
-
-    console.log(
-      `✅ Plan changed for user ${user.userUuid}: ${oldTier} → ${newTier}, length: ${activeLength}, expires at ${expiresAt}`
-    );
-  } else {
+  if (!newTier) {
     console.log(
       `⚠️ Plan changed but could not determine new tier from product_id: ${data.product_id}`
     );
+    return;
+  }
+
+  const currentTier = user.activeTier || 'FREE';
+  const currentLength = user.activeLength;
+
+  // Determine the type of change
+  const changeType: SubscriptionChangeType = determineChangeType(
+    currentTier,
+    newTier,
+    currentLength,
+    newActiveLength
+  );
+
+  console.log(
+    `🔄 Plan change webhook received: ${currentTier}/${currentLength} → ${newTier}/${newActiveLength}`
+  );
+  console.log(`📋 Change type: ${getChangeTypeDescription(changeType)}`);
+
+  // Re-fetch user to get latest plan change status
+  const freshUser = await getPrismaClient().userMapping.findUnique({
+    where: { userUuid: user.userUuid },
+  });
+
+  // ============================================================
+  // NEW FLOW: Check if plan change was already initiated via API
+  // ============================================================
+  if (freshUser?.planChangeStatus === PlanChangeStatus.PENDING) {
+    // Plan change was initiated via our API - just log confirmation
+    // The pending info is already stored, and payment.succeeded will complete it
+    console.log(`✅ Plan change webhook confirms pending change for user ${user.userUuid}`);
+    console.log(`   Waiting for payment.succeeded to apply: ${freshUser.pendingTier}`);
+
+    // Update dodoCustomerId if available
+    if (data.customer?.customer_id && !freshUser.dodoCustomerId) {
+      await getPrismaClient().userMapping.update({
+        where: { userUuid: user.userUuid },
+        data: { dodoCustomerId: data.customer.customer_id },
+      });
+    }
+
+    // Log for audit
+    console.log('Plan change details:', JSON.stringify(rawPayload, null, 2));
+    return;
+  }
+
+  // ============================================================
+  // LEGACY/EXTERNAL FLOW: Plan change initiated outside our API
+  // Store pending info for processing
+  // ============================================================
+  console.log(`📋 Plan change initiated externally for user ${user.userUuid}`);
+
+  switch (changeType) {
+    case 'IMMEDIATE_UPGRADE':
+      // For upgrades, store as pending with PENDING status
+      await getPrismaClient().userMapping.update({
+        where: { userUuid: user.userUuid },
+        data: {
+          planChangeStatus: PlanChangeStatus.PENDING,
+          pendingTier: newTier,
+          pendingActiveLength: newActiveLength,
+          pendingTierEffectiveDate: new Date(),
+          pendingChangeType: changeType,
+          pendingProductId: data.product_id || null,
+          planChangeInitiatedAt: new Date(),
+          dodoCustomerId: data.customer?.customer_id || user.dodoCustomerId,
+        },
+      });
+      console.log(
+        `📋 Pending upgrade stored for user ${user.userUuid}: ${currentTier} → ${newTier} (waiting for payment)`
+      );
+      break;
+
+    case 'DEFERRED_DOWNGRADE':
+    case 'DEFERRED_FREQUENCY_CHANGE':
+      // Deferred changes don't require payment - they take effect at end of cycle
+      // Mark as COMPLETED since they're scheduled and will auto-apply
+      await getPrismaClient().userMapping.update({
+        where: { userUuid: user.userUuid },
+        data: {
+          planChangeStatus: PlanChangeStatus.COMPLETED, // No payment needed for deferred changes
+          pendingTier: newTier,
+          pendingActiveLength: newActiveLength,
+          pendingTierEffectiveDate: user.tierExpiresAt,
+          pendingChangeType: changeType,
+          pendingProductId: data.product_id || null,
+          planChangeInitiatedAt: new Date(),
+          dodoCustomerId: data.customer?.customer_id || user.dodoCustomerId,
+        },
+      });
+      console.log(
+        `📅 Deferred change scheduled for user ${user.userUuid}: ${currentTier} → ${newTier} (effective: ${user.tierExpiresAt?.toISOString()})`
+      );
+      break;
+
+    case 'NO_CHANGE':
+      console.log(`ℹ️ No actual change detected for user ${user.userUuid}`);
+      break;
   }
 
   // Update session if exists
@@ -2026,14 +2908,14 @@ async function handleSubscriptionPlanChanged(
     await getPrismaClient().session.update({
       where: { id: existingSession.id },
       data: {
-        requestedTier: newTier || existingSession.requestedTier,
+        requestedTier: changeType === 'IMMEDIATE_UPGRADE' ? newTier : existingSession.requestedTier,
         expiresAt: expiresAt ? new Date(expiresAt) : existingSession.expiresAt,
       },
     });
-    console.log(`✅ Updated session ${existingSession.sessionId} with new tier ${newTier}`);
+    console.log(`✅ Updated session ${existingSession.sessionId}`);
   }
 
-  // Log the plan change for audit purposes
+  // Log for audit
   console.log('Plan change details:', JSON.stringify(rawPayload, null, 2));
 }
 

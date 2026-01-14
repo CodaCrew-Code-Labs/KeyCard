@@ -21,6 +21,7 @@ enum PaymentStatus {
   CANCELLED
   REFUNDED
   DISPUTED
+  AUTO_DELETED
 }
 
 enum SubscriptionStatus {
@@ -30,6 +31,13 @@ enum SubscriptionStatus {
   CANCELLED
   EXPIRED
   GRACE
+}
+
+// Plan change status - tracks the state of plan upgrade/downgrade requests
+enum PlanChangeStatus {
+  PENDING          // Plan change initiated, waiting for payment
+  COMPLETED        // Payment succeeded, plan change applied
+  PAYMENT_NEEDED   // Payment failed/on-hold, user needs to update payment method
 }
 
 enum SessionMode {
@@ -42,10 +50,24 @@ model UserMapping {
   email              String              @unique @db.VarChar(255)
   dodoCustomerId     String?             @map("dodo_customer_id")
 
+  // Active subscription ID from DoDo Payments
+  // This is the source of truth for the user's current subscription
+  subscriptionId     String?             @map("subscription_id") @db.VarChar(100)
+
   activeTier         String?             @map("active_tier") @db.VarChar(50)
   activeLength       String?             @map("active_length") @db.VarChar(50)
   tierExpiresAt      DateTime?           @map("tier_expires_at")
   subscriptionStatus SubscriptionStatus? @map("subscription_status")
+
+  // Plan change tracking fields
+  // Used to track upgrade/downgrade requests and their payment status
+  planChangeStatus         PlanChangeStatus? @map("plan_change_status")
+  pendingTier              String?           @map("pending_tier") @db.VarChar(50)
+  pendingActiveLength      String?           @map("pending_active_length") @db.VarChar(50)
+  pendingTierEffectiveDate DateTime?         @map("pending_tier_effective_date")
+  pendingChangeType        String?           @map("pending_change_type") @db.VarChar(50)
+  pendingProductId         String?           @map("pending_product_id") @db.VarChar(100)
+  planChangeInitiatedAt    DateTime?         @map("plan_change_initiated_at")
 
   createdAt          DateTime            @default(now()) @map("created_at")
 
@@ -93,6 +115,7 @@ model Payment {
   tier               String?       @db.VarChar(50)
 
   dodoSubscriptionId String?       @map("dodo_subscription_id")
+  paymentLink        String?       @map("payment_link")
 
   createdAt          DateTime      @default(now()) @map("created_at")
   updatedAt          DateTime      @updatedAt @map("updated_at")

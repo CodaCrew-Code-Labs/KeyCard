@@ -113,6 +113,7 @@ export function createRoutes(): Router {
    * GET /user/:email/billing
    * Returns user's active tier and latest payment status.
    * This is the primary endpoint for checking subscription status.
+   * Also includes any pending tier changes (downgrades/frequency changes scheduled for next billing cycle).
    */
   router.get('/user/:email/billing', async (req, res, next) => {
     try {
@@ -137,7 +138,20 @@ export function createRoutes(): Router {
 
       const response: BillingResponse = {
         activeTier: user.activeTier,
+        activeLength: user.activeLength,
         tierExpiresAt: user.tierExpiresAt ? user.tierExpiresAt.toISOString() : null,
+        subscriptionStatus: user.subscriptionStatus,
+        // Include pending change info if there's a scheduled change
+        pendingChange: user.pendingTier
+          ? {
+              tier: user.pendingTier,
+              activeLength: user.pendingActiveLength,
+              effectiveDate: user.pendingTierEffectiveDate
+                ? user.pendingTierEffectiveDate.toISOString()
+                : null,
+              changeType: user.pendingChangeType,
+            }
+          : null,
         latestPayment: latestPayment
           ? {
               status: latestPayment.status,
