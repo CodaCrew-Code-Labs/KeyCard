@@ -187,20 +187,50 @@ describe('Main Routes', () => {
 
   describe('GET /api/v1/user/:email', () => {
     it('should return user details when user exists', async () => {
+      const mockCreatedAt = new Date('2024-01-01T00:00:00Z');
+      const mockTierExpiresAt = new Date('2024-12-31T23:59:59Z');
+      const mockPendingEffectiveDate = new Date('2024-02-01T00:00:00Z');
+      const mockPlanChangeInitiatedAt = new Date('2024-01-15T10:00:00Z');
+
       mockUserMapping.findUnique.mockResolvedValue({
         email: 'test@example.com',
         userUuid: 'uuid-123',
         dodoCustomerId: 'dodo-456',
-        createdAt: new Date(),
+        activeTier: 'PROFESSIONAL',
+        tierExpiresAt: mockTierExpiresAt,
+        createdAt: mockCreatedAt,
+        activeLength: 'MONTHLY',
+        pendingActiveLength: 'YEARLY',
+        pendingChangeType: 'DEFERRED_FREQUENCY_CHANGE',
+        pendingProductId: 'prod-789',
+        pendingTier: 'PROFESSIONAL',
+        pendingTierEffectiveDate: mockPendingEffectiveDate,
+        planChangeInitiatedAt: mockPlanChangeInitiatedAt,
+        planChangeStatus: 'PENDING',
+        subscriptionId: 'sub-123',
+        subscriptionStatus: 'active',
       });
 
       const response = await request(app).get('/api/v1/user/test@example.com');
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({
+        user_uuid: 'uuid-123',
         email: 'test@example.com',
-        sob_id: 'uuid-123',
         dodo_customer_id: 'dodo-456',
+        active_tier: 'PROFESSIONAL',
+        tier_expires_at: mockTierExpiresAt.toISOString(),
+        created_at: mockCreatedAt.toISOString(),
+        active_length: 'MONTHLY',
+        pending_active_length: 'YEARLY',
+        pending_change_type: 'DEFERRED_FREQUENCY_CHANGE',
+        pending_product_id: 'prod-789',
+        pending_tier: 'PROFESSIONAL',
+        pending_tier_effective_date: mockPendingEffectiveDate.toISOString(),
+        plan_change_initiated_at: mockPlanChangeInitiatedAt.toISOString(),
+        plan_change_status: 'PENDING',
+        subscription_id: 'sub-123',
+        subscription_status: 'active',
       });
     });
 

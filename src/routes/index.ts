@@ -100,9 +100,22 @@ export function createRoutes(): Router {
       }
 
       res.json({
+        user_uuid: user.userUuid,
         email: user.email,
-        sob_id: user.userUuid,
         dodo_customer_id: user.dodoCustomerId,
+        active_tier: user.activeTier,
+        tier_expires_at: user.tierExpiresAt?.toISOString() || null,
+        created_at: user.createdAt.toISOString(),
+        active_length: user.activeLength,
+        pending_active_length: user.pendingActiveLength,
+        pending_change_type: user.pendingChangeType,
+        pending_product_id: user.pendingProductId,
+        pending_tier: user.pendingTier,
+        pending_tier_effective_date: user.pendingTierEffectiveDate?.toISOString() || null,
+        plan_change_initiated_at: user.planChangeInitiatedAt?.toISOString() || null,
+        plan_change_status: user.planChangeStatus,
+        subscription_id: user.subscriptionId,
+        subscription_status: user.subscriptionStatus,
       });
     } catch (error) {
       next(error);
